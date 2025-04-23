@@ -103,17 +103,15 @@ def main(
     start_time,
     end_time,
     batch_size,
-    station,
     num_layers,
     epochs,
     weight_decay,
     fh,
     clim_div,
-    nwp_model,
-    exclusion_buffer,
-    metvar,
+    device,
     filtered_df,
     hrrr_df,
+    nwp_model='HRRR',
     sequence_length=30,
     target="target_error",
     learning_rate=5e-5,
@@ -121,8 +119,6 @@ def main(
 ):
     print("Am I using GPUS ???", torch.cuda.is_available())
     print("Number of gpus: ", torch.cuda.device_count())
-
-    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     torch.cuda.set_device(device)
     print(device)
     torch.manual_seed(101)
@@ -142,162 +138,184 @@ def main(
         f"/home/aevans/inference/MODELS/{clim_div}_{metvar}_{station}_encoder.pth"
     )
 
-    # prepare data for LSTM
-    (lstm_df, features, stations, target, valid_times) = (
-        prepare_lstm_data.prepare_lstm_data(filtered_df, hrrr_df, train=True)
-    )
+    year = now.year
+    month = now.month
+    day = now.day
+    outpath = "/home/aevans/inference/FINAL_OUTPUT"
 
-    (
-        df_train,
-        features,
-        stations,
-        target,
-        vt,
-    ) = create_data_for_lstm.create_data_for_model(
-        station, fh, today_date, metvar
-    )  # to change which model you are matching for you need to chage which
-    print("FEATURES", features)
-    print()
-    print("TARGET", target)
-    print()
+    for clim_div in clim_divs:
+        stations_in_div = nysm_df[nysm_df["climate_division"] == clim_div]["station"].unique().tolist()
 
-    experiment = Experiment(
-        api_key="leAiWyR5Ck7tkdiHIT7n6QWNa",
-        project_name="inference_training",
-        workspace="shmaronshmevans",
-    )
+        for stid in stations_in_div:
+            filtered_df = nysm_df[nysm_df["station"] == stid]
 
-    train_dataset = sequencer.SequenceDatasetMultiTask(
-        dataframe=df_train,
-        target=target,
-        features=features,
-        sequence_length=sequence_length,
-        forecast_steps=fh,
-        device=device,
-        nwp_model=nwp_model,
-        metvar=metvar,
-    )
+            for metvar in ["t2m", "u_total", "tp"]:
 
-    train_kwargs = {
-        "batch_size": batch_size,
-        "pin_memory": False,
-        "shuffle": True,
-        "collate_fn": custom_collate,
-    }
 
-    train_loader = torch.utils.data.DataLoader(train_dataset, **train_kwargs)
-    print("!! Data Loaders Succesful !!")
+                # prepare data for LSTM
+                (lstm_df, features, stations, target, valid_times) = (
+                    prepare_lstm_data.prepare_lstm_data(filtered_df, hrrr_df, train=True)
+                )
 
-    init_start_event = torch.cuda.Event(enable_timing=True)
-    init_end_event = torch.cuda.Event(enable_timing=True)
+                (
+                    df_train,
+                    features,
+                    stations,
+                    target,
+                    vt,
+                ) = create_data_for_lstm.create_data_for_model(
+                    station, fh, today_date, metvar
+                )  # to change which model you are matching for you need to chage which
+                print("FEATURES", features)
+                print()
+                print("TARGET", target)
+                print()
 
-    num_sensors = int(len(features))
-    hidden_units = int(12 * len(features))
+                experiment = Experiment(
+                    api_key="leAiWyR5Ck7tkdiHIT7n6QWNa",
+                    project_name="inference_training",
+                    workspace="shmaronshmevans",
+                )
 
-    # Initialize multi-task learning model with one encoder and decoders for each station
-    model = encode_decode_lstm.ShallowLSTM_seq2seq_multi_task(
-        num_sensors=num_sensors,
-        hidden_units=hidden_units,
-        num_layers=num_layers,
-        mlp_units=1500,
-        device=device,
-        num_stations=len(stations),
-    ).to(device)
+                train_dataset = sequencer.SequenceDatasetMultiTask(
+                    dataframe=df_train,
+                    target=target,
+                    features=features,
+                    sequence_length=sequence_length,
+                    forecast_steps=fh,
+                    device=device,
+                    nwp_model=nwp_model,
+                    metvar=metvar,
+                )
 
-    if fh == 1:
-        if os.path.exists(encoder_path_og):
-            print("Loading Encoder Model")
-            model.encoder.load_state_dict(torch.load(encoder_path_og), strict=False)
-            # Example usage for encoder and decoder
-            get_model_file_size(encoder_path_og)
+                train_kwargs = {
+                    "batch_size": batch_size,
+                    "pin_memory": False,
+                    "shuffle": True,
+                    "collate_fn": custom_collate,
+                }
 
-        if os.path.exists(decoder_path_og):
-            print("Loading Decoder Model")
-            model.decoder.load_state_dict(torch.load(decoder_path_og), strict=False)
-            get_model_file_size(decoder_path_og)
-    else:
-        if os.path.exists(encoder_path):
-            print("Loading Encoder Model")
-            model.encoder.load_state_dict(torch.load(encoder_path), strict=False)
-            # Example usage for encoder and decoder
-            get_model_file_size(encoder_path)
+                train_loader = torch.utils.data.DataLoader(train_dataset, **train_kwargs)
+                print("!! Data Loaders Succesful !!")
 
-        if os.path.exists(decoder_path):
-            print("Loading Decoder Model")
-            model.decoder.load_state_dict(torch.load(decoder_path), strict=False)
-            get_model_file_size(decoder_path)
+                init_start_event = torch.cuda.Event(enable_timing=True)
+                init_end_event = torch.cuda.Event(enable_timing=True)
 
-    optimizer = torch.optim.AdamW(
-        model.parameters(), lr=learning_rate, weight_decay=weight_decay
-    )
+                num_sensors = int(len(features))
+                hidden_units = int(12 * len(features))
 
-    loss_function = OutlierFocusedLoss(2.0, device)
+                # Initialize multi-task learning model with one encoder and decoders for each station
+                model = encode_decode_lstm.ShallowLSTM_seq2seq_multi_task(
+                    num_sensors=num_sensors,
+                    hidden_units=hidden_units,
+                    num_layers=num_layers,
+                    mlp_units=1500,
+                    device=device,
+                    num_stations=len(stations),
+                ).to(device)
 
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer, factor=0.1, patience=4
-    )
+                if fh == 1:
+                    if os.path.exists(encoder_path_og):
+                        print("Loading Encoder Model")
+                        model.encoder.load_state_dict(torch.load(encoder_path_og), strict=False)
+                        # Example usage for encoder and decoder
+                        get_model_file_size(encoder_path_og)
 
-    hyper_params = {
-        "num_layers": num_layers,
-        "learning_rate": learning_rate,
-        "sequence_length": sequence_length,
-        "num_hidden_units": hidden_units,
-        "batch_size": batch_size,
-        "station": station,
-        "regularization": weight_decay,
-        "forecast_hour": fh,
-        "climate_div": clim_div,
-        "metvar": metvar,
-    }
-    print("--- Training LSTM ---")
+                    if os.path.exists(decoder_path_og):
+                        print("Loading Decoder Model")
+                        model.decoder.load_state_dict(torch.load(decoder_path_og), strict=False)
+                        get_model_file_size(decoder_path_og)
+                else:
+                    if os.path.exists(encoder_path):
+                        print("Loading Encoder Model")
+                        model.encoder.load_state_dict(torch.load(encoder_path), strict=False)
+                        # Example usage for encoder and decoder
+                        get_model_file_size(encoder_path)
 
-    early_stopper = EarlyStopper(10)
+                    if os.path.exists(decoder_path):
+                        print("Loading Decoder Model")
+                        model.decoder.load_state_dict(torch.load(decoder_path), strict=False)
+                        get_model_file_size(decoder_path)
 
-    init_start_event.record()
-    train_loss_ls = []
-    for ix_epoch in range(1, epochs + 1):
-        gc.collect()
-        train_loss = model.train_model(
-            data_loader=train_loader,
-            loss_func=loss_function,
-            optimizer=optimizer,
-            epoch=ix_epoch,
-            training_prediction="recursive",
-            teacher_forcing_ratio=0.5,
-        )
-        scheduler.step(train_loss)
-        print(" ")
-        train_loss_ls.append(train_loss)
-        # log info for comet and loss curves
-        experiment.set_epoch(ix_epoch)
-        experiment.log_metric("train_loss", train_loss)
-        experiment.log_metrics(hyper_params, epoch=ix_epoch)
-        if early_stopper.early_stop(train_loss):
-            print(f"Early stopping at epoch {ix_epoch}")
-            break
-        if train_loss <= min(train_loss_ls) and ix_epoch > 5:
-            print(f"Saving Model Weights... EPOCH {ix_epoch}")
-            save_model_weights(model, encoder_path, decoder_path)
-            save_model = False
+                optimizer = torch.optim.AdamW(
+                    model.parameters(), lr=learning_rate, weight_decay=weight_decay
+                )
 
-    init_end_event.record()
+                loss_function = OutlierFocusedLoss(2.0, device)
 
-    if save_model == True:
-        states = model.state_dict()
-        torch.save(model.encoder.state_dict(), f"{encoder_path}")
-        torch.save(model.decoder.state_dict(), decoder_path)
+                scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+                    optimizer, factor=0.1, patience=4
+                )
 
-    print("Successful Experiment")
-    # Seamlessly log your Pytorch model
-    # log_model(experiment, model, model_name="v9")
-    experiment.end()
-    print("... completed ...")
-    gc.collect()
-    torch.cuda.empty_cache()
-    # End of MAIN
+                hyper_params = {
+                    "num_layers": num_layers,
+                    "learning_rate": learning_rate,
+                    "sequence_length": sequence_length,
+                    "num_hidden_units": hidden_units,
+                    "batch_size": batch_size,
+                    "station": station,
+                    "regularization": weight_decay,
+                    "forecast_hour": fh,
+                    "climate_div": clim_div,
+                    "metvar": metvar,
+                }
+                print("--- Training LSTM ---")
+
+                early_stopper = EarlyStopper(10)
+
+                init_start_event.record()
+                train_loss_ls = []
+                for ix_epoch in range(1, epochs + 1):
+                    gc.collect()
+                    train_loss = model.train_model(
+                        data_loader=train_loader,
+                        loss_func=loss_function,
+                        optimizer=optimizer,
+                        epoch=ix_epoch,
+                        training_prediction="recursive",
+                        teacher_forcing_ratio=0.5,
+                    )
+                    scheduler.step(train_loss)
+                    print(" ")
+                    train_loss_ls.append(train_loss)
+                    # log info for comet and loss curves
+                    experiment.set_epoch(ix_epoch)
+                    experiment.log_metric("train_loss", train_loss)
+                    experiment.log_metrics(hyper_params, epoch=ix_epoch)
+                    if early_stopper.early_stop(train_loss):
+                        print(f"Early stopping at epoch {ix_epoch}")
+                        break
+                    if train_loss <= min(train_loss_ls) and ix_epoch > 5:
+                        print(f"Saving Model Weights... EPOCH {ix_epoch}")
+                        save_model_weights(model, encoder_path, decoder_path)
+                        save_model = False
+
+                init_end_event.record()
+
+                if save_model == True:
+                    states = model.state_dict()
+                    torch.save(model.encoder.state_dict(), f"{encoder_path}")
+                    torch.save(model.decoder.state_dict(), decoder_path)
+
+                print("Successful Experiment")
+                # Seamlessly log your Pytorch model
+                # log_model(experiment, model, model_name="v9")
+                experiment.end()
+                print("... completed ...")
+                gc.collect()
+                torch.cuda.empty_cache()
+                # End of MAIN
 
 
 if __name__ == "__main__":
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--clim_div", nargs="+", required=True, help="List of climate divisions")
+    parser.add_argument("--device_id", type=int, required=True, help="Device to use (e.g., 'cuda:0', 'cuda:1', 'cpu')")
+    args = parser.parse_args()
+    # Set the device based on the passed device ID
+    device = torch.device(f"cuda:{args.device_id}" if torch.cuda.is_available() else "cpu")
+
     # get time for inference
     now = datetime.datetime.now()
     year = now.year
@@ -312,44 +330,29 @@ if __name__ == "__main__":
     metvar_ls = ["t2m", "u_total", "tp"]
     nwp_model = "HRRR"
 
-    nysm_clim = pd.read_csv("/home/aevans/nwp_bias/src/landtype/data/nysm.csv")
-    # load NYSM data
-    nysm_df = nysm_data.load_nysm_data(year)
-    nysm_df.reset_index(inplace=True)
-    nysm_network = nysm_df["station"].unique().tolist()
-
-    for c in nysm_clim["climate_division_name"].unique():
-        df = nysm_clim[nysm_clim["climate_division_name"] == c]
-        stations = df["stid"].unique()
-        fh_all = np.arange(1, 19)
-        for metvar in metvar_ls:
-            for s in stations:
-                filtered_df = nysm_df[nysm_df["station"] == s]
-                fh = fh_all.copy()
-                while len(fh) > 0:
-                    fh_r = random.choice(fh)
-                    try:
-                        print(f"-- Loading data from HRRR for FH {fh_r} --")
-                        hrrr_df = hrrr_data.read_hrrr_data(str(fh_r).zfill(2), year)
-                        main(
-                            start_time=start_time,
-                            end_time=end_time,
-                            batch_size=1000,
-                            station=s,
-                            num_layers=3,
-                            epochs=5000,
-                            weight_decay=1e-15,
-                            fh=fh_r,
-                            clim_div=c,
-                            nwp_model=nwp_model,
-                            exclusion_buffer=exclude,
-                            metvar=metvar,
-                            filtered_df=filtered_df,
-                            hrrr_df=hrrr_df,
-                        )
-                        gc.collect()
-                        fh = fh[fh != fh_r]  # removes used FH by value
-                    except Exception as e:
-                        print(f"-- ERROR ERROR --")
-                        print(f"Climate Div: {c}, Station: {s}, FH: {fh_r}")
-                        print(e)
+    fh_all = np.arange(1, 19)
+    fh = fh_all.copy()
+    while len(fh) > 0:
+        fh_r = random.choice(fh)
+        try:
+            print(f"-- Loading data from HRRR for FH {fh_r} --")
+            hrrr_df = hrrr_data.read_hrrr_data(str(fh_r).zfill(2), year)
+            main(
+                start_time=start_time,
+                end_time=end_time,
+                batch_size=1000,
+                num_layers=3,
+                epochs=5000,
+                weight_decay=1e-15,
+                fh=fh_r,
+                clim_div=args.clim_div,
+                device=device,
+                filtered_df=filtered_df,
+                hrrr_df=hrrr_df,
+            )
+            gc.collect()
+            fh = fh[fh != fh_r]  # removes used FH by value
+        except Exception as e:
+            print(f"-- ERROR ERROR --")
+            print(f"Climate Div: {c}, Station: {s}, FH: {fh_r}")
+            print(e)
