@@ -13,7 +13,8 @@ def read_hrrr_data(fh, year):
         pandas.DataFrame: of hrrr weather forecast information for each NYSM site.
     """
 
-    years = [str(int(year - 1)), str(int(year))]
+    # years = [str(int(year - 1)), str(int(year))]
+    years = ["2023", "2024", "2025"]
     savedir = f"/home/aevans/nwp_bias/src/machine_learning/data/hrrr_data/fh{fh}/"
 
     # create empty lists to hold dataframes for each model

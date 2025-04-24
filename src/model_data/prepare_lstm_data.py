@@ -5,8 +5,9 @@ sys.path.append("..")
 import datetime
 import pandas as pd
 import numpy as np
+import statistics as st
 
-from model_data import nysm_data, hrrr_data, encode, get_closest_nysm_stations
+from model_data import nysm_data, hrrr_data, encode, get_closest_nysm_stations, get_error
 
 
 def create_geo_dict(geo_df, c, df1):
@@ -62,18 +63,25 @@ def add_suffix(master_df, station):
 
 
 def dataframe_wrapper(stations, df):
+    print("FUNC")
     master_df = df[df["station"] == stations[0]]
     master_df = add_suffix(master_df, stations[0])
+    print(master_df)
     for station in stations[1:]:
         df1 = df[df["station"] == station]
         df1 = add_suffix(df1, station)
         master_df = master_df.merge(
             df1, on="valid_time", suffixes=(None, f"_{station}")
         )
+        print(master_df)
+        print()
+    print("FINAL")
+    print(master_df)
+    print()
     return master_df
 
 
-def prepare_lstm_data(nysm_df, hrrr_df, train=False):
+def prepare_lstm_data(nysm_df, hrrr_df, station, metvar, train=False):
     # Filter NYSM data to match valid times from HRRR data
     hrrr_df = hrrr_df.sort_values("valid_time")
     hrrr_df["valid_time"] = pd.to_datetime(hrrr_df["valid_time"])
@@ -99,6 +107,7 @@ def prepare_lstm_data(nysm_df, hrrr_df, train=False):
     stations = get_closest_nysm_stations.get_closest_stations_csv(
         station
     )
+    print(stations)
 
     hrrr_df1 = hrrr_df[hrrr_df["station"].isin(stations)]
     nysm_df1 = nysm_df[nysm_df["station"].isin(stations)]
@@ -116,15 +125,7 @@ def prepare_lstm_data(nysm_df, hrrr_df, train=False):
     # format for LSTM
     hrrr_df1 = columns_drop_hrrr(hrrr_df1)
 
-    # fh2_, fh4_ = get_more_fh(fh, station, var, mytimes)
-    # nysm_df1 = columns_drop_nysm(nysm_df1)
     master_df = dataframe_wrapper(stations, hrrr_df1)
-
-    nysm_df1 = nysm_df1.drop(
-        columns=[
-            "index",
-        ]
-    )
     master_df2 = dataframe_wrapper(stations, nysm_df1)
 
     # combine HRRR + NYSM data on time
@@ -134,7 +135,7 @@ def prepare_lstm_data(nysm_df, hrrr_df, train=False):
     # options are {
     # t2m, mslma, tp, u_total
     # }
-    the_df = get_error.nwp_error(var, station, master_df)
+    the_df = get_error.nwp_error(metvar, station, master_df)
     valid_times = the_df["valid_time"].tolist()
     # encode day of year to be cylcic
     the_df = encode.encode(the_df, "valid_time", 366)
@@ -160,6 +161,7 @@ def prepare_lstm_data(nysm_df, hrrr_df, train=False):
             print(k)
             continue
         else:
+            print(k)
             means = st.mean(new_df[k])
             stdevs = st.pstdev(new_df[k])
             new_df[k] = (new_df[k] - means) / stdevs
@@ -176,7 +178,5 @@ def prepare_lstm_data(nysm_df, hrrr_df, train=False):
     target_sensor = "target_error"
     forecast_lead = 0
     target = f"{target_sensor}"
-    lstm_df.insert(loc=(0), column=target, value=lstm_df[target_sensor])
-    lstm_df = lstm_df.drop(columns=[target_sensor]).fillna(0)
 
     return lstm_df, features, stations, target, valid_times

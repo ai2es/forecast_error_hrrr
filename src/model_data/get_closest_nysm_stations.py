@@ -79,7 +79,7 @@ def main():
     master_ls = []
 
     for s in stations:
-        utilize_ls = get_closest_stations(climdf, 5, s, "HRRR")
+        utilize_ls = get_closest_stations(climdf, 4, s, "HRRR")
         master_ls.append({
             "station": s,
             "closest_stations": utilize_ls

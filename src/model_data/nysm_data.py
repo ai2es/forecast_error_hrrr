@@ -32,7 +32,8 @@ def load_nysm_data(start_year):
     # Initialize an empty list to store data for each year.
     nysm_1H = []
 
-    for year in np.arange(int(start_year - 1), int(start_year + 1)):
+    # for year in np.arange(int(start_year - 1), int(start_year + 1)):
+    for year in np.arange(2023, 2026):
         df = pd.read_parquet(f"{nysm_path}nysm_1H_obs_{year}.parquet")
         df.reset_index(inplace=True)
         df = df.rename(columns={"time_1H": "valid_time"})
