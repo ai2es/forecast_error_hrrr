@@ -169,5 +169,4 @@ def main(year, start_month):
 
 
 if __name__ == "__main__":
-    for year in years:
-        main(year)
+    main(year)

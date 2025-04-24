@@ -3,7 +3,7 @@ import sys
 sys.path.append("..")
 
 import datetime
-import panas as pd
+import pandas as pd
 import numpy as np
 
 from model_data import nysm_data, hrrr_data, encode, get_closest_nysm_stations

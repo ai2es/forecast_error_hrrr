@@ -6,6 +6,7 @@ from TRAINING import engine_lstm_training
 
 from datetime import datetime
 
+
 def main():
     engine_lstm_training.main()
     print("Training Finished")
@@ -15,4 +16,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

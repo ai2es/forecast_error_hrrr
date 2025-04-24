@@ -844,5 +844,4 @@ def main(month, year, model, fh, mask_water=True):
 if __name__ == "__main__":
     # # One at a time
     model = "hrrr"
-    for fh in np.arange(1, 19):
-        main(str(month).zfill(2), year, model, str(fh).zfill(2))
+    main(str(month).zfill(2), year, model, str(fh).zfill(2))

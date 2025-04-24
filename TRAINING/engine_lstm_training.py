@@ -1,6 +1,6 @@
 import sys
 
-sys.path.append(".")
+sys.path.append("..")
 
 from comet_ml import Experiment, Artifact
 from comet_ml.integration.pytorch import log_model
@@ -38,11 +38,13 @@ def custom_collate(batch):
         return None  # Return None if the batch is empty
     return torch.utils.data.default_collate(batch)
 
+
 def date_filter(ldf, time1, time2):
     ldf = ldf[ldf["valid_time"] > time1]
     ldf = ldf[ldf["valid_time"] < time2]
 
     return ldf
+
 
 class EarlyStopper:
     def __init__(self, patience, min_delta=0):
@@ -111,7 +113,7 @@ def main(
     device,
     filtered_df,
     hrrr_df,
-    nwp_model='HRRR',
+    nwp_model="HRRR",
     sequence_length=30,
     target="target_error",
     learning_rate=5e-5,
@@ -144,17 +146,22 @@ def main(
     outpath = "/home/aevans/inference/FINAL_OUTPUT"
 
     for clim_div in clim_divs:
-        stations_in_div = nysm_df[nysm_df["climate_division"] == clim_div]["station"].unique().tolist()
+        stations_in_div = (
+            nysm_df[nysm_df["climate_division"] == clim_div]["station"]
+            .unique()
+            .tolist()
+        )
 
         for stid in stations_in_div:
             filtered_df = nysm_df[nysm_df["station"] == stid]
 
             for metvar in ["t2m", "u_total", "tp"]:
 
-
                 # prepare data for LSTM
                 (lstm_df, features, stations, target, valid_times) = (
-                    prepare_lstm_data.prepare_lstm_data(filtered_df, hrrr_df, train=True)
+                    prepare_lstm_data.prepare_lstm_data(
+                        filtered_df, hrrr_df, train=True
+                    )
                 )
 
                 (
@@ -195,7 +202,9 @@ def main(
                     "collate_fn": custom_collate,
                 }
 
-                train_loader = torch.utils.data.DataLoader(train_dataset, **train_kwargs)
+                train_loader = torch.utils.data.DataLoader(
+                    train_dataset, **train_kwargs
+                )
                 print("!! Data Loaders Succesful !!")
 
                 init_start_event = torch.cuda.Event(enable_timing=True)
@@ -217,24 +226,32 @@ def main(
                 if fh == 1:
                     if os.path.exists(encoder_path_og):
                         print("Loading Encoder Model")
-                        model.encoder.load_state_dict(torch.load(encoder_path_og), strict=False)
+                        model.encoder.load_state_dict(
+                            torch.load(encoder_path_og), strict=False
+                        )
                         # Example usage for encoder and decoder
                         get_model_file_size(encoder_path_og)
 
                     if os.path.exists(decoder_path_og):
                         print("Loading Decoder Model")
-                        model.decoder.load_state_dict(torch.load(decoder_path_og), strict=False)
+                        model.decoder.load_state_dict(
+                            torch.load(decoder_path_og), strict=False
+                        )
                         get_model_file_size(decoder_path_og)
                 else:
                     if os.path.exists(encoder_path):
                         print("Loading Encoder Model")
-                        model.encoder.load_state_dict(torch.load(encoder_path), strict=False)
+                        model.encoder.load_state_dict(
+                            torch.load(encoder_path), strict=False
+                        )
                         # Example usage for encoder and decoder
                         get_model_file_size(encoder_path)
 
                     if os.path.exists(decoder_path):
                         print("Loading Decoder Model")
-                        model.decoder.load_state_dict(torch.load(decoder_path), strict=False)
+                        model.decoder.load_state_dict(
+                            torch.load(decoder_path), strict=False
+                        )
                         get_model_file_size(decoder_path)
 
                 optimizer = torch.optim.AdamW(
@@ -308,24 +325,32 @@ def main(
 
 
 if __name__ == "__main__":
-
     parser = argparse.ArgumentParser()
-    parser.add_argument("--clim_div", nargs="+", required=True, help="List of climate divisions")
-    parser.add_argument("--device_id", type=int, required=True, help="Device to use (e.g., 'cuda:0', 'cuda:1', 'cpu')")
+    parser.add_argument(
+        "--clim_div", nargs="+", required=True, help="List of climate divisions"
+    )
+    parser.add_argument(
+        "--device_id",
+        type=int,
+        required=True,
+        help="Device to use (e.g., 'cuda:0', 'cuda:1', 'cpu')",
+    )
     args = parser.parse_args()
     # Set the device based on the passed device ID
-    device = torch.device(f"cuda:{args.device_id}" if torch.cuda.is_available() else "cpu")
+    device = torch.device(
+        f"cuda:{args.device_id}" if torch.cuda.is_available() else "cpu"
+    )
 
     # get time for inference
-    now = datetime.datetime.now()
+    now = datetime.now()
     year = now.year
     month = now.month
-    day = now.day 
+    day = now.day
 
     # start_time = datetime(int(year-1), int(month-1), 1, 0, 0, 0)
     # end_time = date_time(year, int(month-1), 28, 23, 59, 0)
     start_time = datetime(2023, 10, 1, 0, 0, 0)
-    end_time = date_time(2025, 3, 31, 23, 59, 0)
+    end_time = datetime(2025, 3, 31, 23, 59, 0)
 
     metvar_ls = ["t2m", "u_total", "tp"]
     nwp_model = "HRRR"
@@ -354,5 +379,4 @@ if __name__ == "__main__":
             fh = fh[fh != fh_r]  # removes used FH by value
         except Exception as e:
             print(f"-- ERROR ERROR --")
-            print(f"Climate Div: {c}, Station: {s}, FH: {fh_r}")
             print(e)

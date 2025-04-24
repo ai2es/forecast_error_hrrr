@@ -8,6 +8,7 @@ from data_cleaning import (
     forecast_hour_parquet_builder,
 )
 
+
 def run_forecast_hour_tasks(fh, year, month, day, model):
     fh = int(fh)
     start_dt = datetime(year - 1, month - 1 or 12, 1)
@@ -18,6 +19,7 @@ def run_forecast_hour_tasks(fh, year, month, day, model):
     all_models_comparison_to_mesos_lstm.main(
         str(month).zfill(2), year, model, str(fh).zfill(2)
     )
+
 
 if __name__ == "__main__":
     fh = sys.argv[1]
