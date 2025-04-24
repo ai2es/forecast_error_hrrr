@@ -844,4 +844,16 @@ def main(month, year, model, fh, mask_water=True):
 if __name__ == "__main__":
     # # One at a time
     model = "hrrr"
-    main(str(month).zfill(2), year, model, str(fh).zfill(2))
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--month", type=int, required=True, help="Month-- of year to grab data for"
+    )
+    parser.add_argument(
+        "--year", type=int, required=True, help="Year-- to grab data for"
+    )
+    parser.add_argument(
+        "--fh", type=int, required=True, help="Forecast Hour-- to grab data for"
+    )
+    args = parser.parse_args()
+
+    main(str(args.month).zfill(2), args.year, model, str(args.fh).zfill(2))

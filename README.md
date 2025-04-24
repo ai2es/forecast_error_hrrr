@@ -32,8 +32,8 @@ Downloading NYSM data can be found here: https://www.nysmesonet.org/weather/requ
  ### model_architecture
 | notebook | description |
 |-----------|------------|
-|encode_decode_lstm.py|encoder decoder architecture (recommended)|
-|engine_lstm_training.py|train lstm on single gpu (recommended)|
+|encode_decode_lstm.py|encoder decoder architecture|
+|engine_lstm_training.py|train lstm on single gpu|
 |lstm_s2s_engine.py|Exectue inference|
 |sequencer.py| persistence method sequencer to feed data to go into lstm|
 

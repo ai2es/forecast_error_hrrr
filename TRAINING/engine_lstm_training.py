@@ -2,9 +2,6 @@ import sys
 
 sys.path.append("..")
 
-from comet_ml import Experiment, Artifact
-from comet_ml.integration.pytorch import log_model
-
 import os
 import argparse
 import functools
@@ -178,12 +175,6 @@ def main(
                 print("TARGET", target)
                 print()
 
-                experiment = Experiment(
-                    api_key="leAiWyR5Ck7tkdiHIT7n6QWNa",
-                    project_name="inference_training",
-                    workspace="shmaronshmevans",
-                )
-
                 train_dataset = sequencer.SequenceDatasetMultiTask(
                     dataframe=df_train,
                     target=target,
@@ -296,9 +287,6 @@ def main(
                     print(" ")
                     train_loss_ls.append(train_loss)
                     # log info for comet and loss curves
-                    experiment.set_epoch(ix_epoch)
-                    experiment.log_metric("train_loss", train_loss)
-                    experiment.log_metrics(hyper_params, epoch=ix_epoch)
                     if early_stopper.early_stop(train_loss):
                         print(f"Early stopping at epoch {ix_epoch}")
                         break
@@ -314,10 +302,6 @@ def main(
                     torch.save(model.encoder.state_dict(), f"{encoder_path}")
                     torch.save(model.decoder.state_dict(), decoder_path)
 
-                print("Successful Experiment")
-                # Seamlessly log your Pytorch model
-                # log_model(experiment, model, model_name="v9")
-                experiment.end()
                 print("... completed ...")
                 gc.collect()
                 torch.cuda.empty_cache()

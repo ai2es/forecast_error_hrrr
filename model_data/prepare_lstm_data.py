@@ -96,12 +96,8 @@ def prepare_lstm_data(nysm_df, hrrr_df, train=False):
 
     # load geo cats
     geo_df = pd.read_csv("/home/aevans/nwp_bias/src/landtype/data/lstm_clusters.csv")
-
-    """
-    NEED TO MAKE THIS FUNCTION JUST READING FROM A CSV, IT TAKES TOO LONG IN INFERENCE, get_closest_nysm_stations
-    """
-    stations = get_closest_nysm_stations.get_closest_stations(
-        nysm_df, 6, station, "HRRR"
+    stations = get_closest_nysm_stations.get_closest_stations_csv(
+        station
     )
 
     hrrr_df1 = hrrr_df[hrrr_df["station"].isin(stations)]
