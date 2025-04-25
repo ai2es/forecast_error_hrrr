@@ -9,14 +9,13 @@
 #SBATCH --gpus-per-node=1
 #SBATCH --nodes=1                    # Run all processes on a single node
 #SBATCH --ntasks=1                   # Number of processes
-#SBATCH --array=0-3  # Adjust to number of GPUs/stations
+#SBATCH --array=13-18  # Adjust to number of GPUs/stations
 #SBATCH --error=/home/aevans/slurm_error_logs/ai2es_error_%j.err
 #SBATCH --output=/home/aevans/slurm_output_logs/ai2es_log_%j.out
 
-CLIM_DIVS=("Mohawk Valley" "Northern Plateau" "St. Lawrence Valley" "Western Plateau")  # Replace with your 4 climate divisions
-CLIM_DIV=${CLIM_DIVS[$SLURM_ARRAY_TASK_ID]}
+echo "[$(date)] Forecast Hour: $SLURM_ARRAY_TASK_ID"
 
 # Run the training script for the selected climate division
-apptainer run --nv /home/aevans/apptainer/pytorch2.sif /home/aevans/miniconda3/bin/python /home/aevans/inference_ai2es_forecast_err/src/lstm_s2s_engine.py \
-    --clim_div $CLIM_DIV \
+apptainer run --nv /home/aevans/apptainer/rapids.sif /home/aevans/miniconda3/bin/python /home/aevans/inference_ai2es_forecast_err/src/lstm_s2s_engine.py \
+    --fh $SLURM_ARRAY_TASK_ID \
     --device_id $SLURM_ARRAY_TASK_ID

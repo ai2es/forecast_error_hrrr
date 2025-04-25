@@ -1,58 +1,52 @@
 import sys
-
 sys.path.append("..")
 
 import datetime
-import panas as pd
+import cudf
+import cupy as cp
 import numpy as np
 import os
-
-from model_data import nysm_data_rapids, hrrr_data, prepare_lstm_data
-
-from model_architecture import encode_decode_lstm, sequencer
+import torch
 import pickle
+import argparse
 
+from torch.utils.dlpack import from_dlpack
+from model_data import nysm_data_rapids, hrrr_data_rapids, prepare_lstm_data_rapids
+from model_architecture import encode_decode_lstm, sequencer
 
-def main(now):
+def main(now, fh):
     nwp_model = "HRRR"
-    start_time = init_start_event.record()
-    # initiate NVIDIA GPU
-    print("Number of gpus: ", torch.cuda.device_count())
-    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-    torch.cuda.set_device(device)
-    print(device)
+    start_event = torch.cuda.Event(enable_timing=True)
+    end_event = torch.cuda.Event(enable_timing=True)
+    start_event.record()
+
+    print("Number of GPUs:", torch.cuda.device_count())
+    device_id = 0
+    torch.cuda.set_device(device_id)
+    device = torch.device(f"cuda:{device_id}")
     torch.manual_seed(101)
 
-    # get time for inference
     year = now.year
-    month = now.month
-    day = now.day
     outpath = "/home/aevans/inference/FINAL_OUTPUT"
 
-    # load NYSM data
+    # Load NYSM data using cuDF
     nysm_df = nysm_data_rapids.load_nysm_data(year)
-    nysm_df.reset_index(inplace=True)
+    nysm_df = nysm_df.reset_index(drop=True)
 
-    nysm_network = nysm_df["station"].unique().tolist()
+    nysm_network = nysm_df["station"].unique().to_pandas().tolist()
 
-    # load clim_div_dict
-    with open(
-        "/home/aevans/inference_ai2es_forecast_err/MODELS/lookups/station_to_climdiv.pkl",
-        "rb",
-    ) as f:
-        loaded_dict = pickle.load(f)
+    hrrr_df = hrrr_data_rapids.read_hrrr_data(str(fh).zfill(2), year)
+
+    # Load station-to-climdiv mapping
+    with open("/home/aevans/inference_ai2es_forecast_err/MODELS/lookups/station_to_climdiv.pkl", "rb") as f:
+        station_to_climdiv = pickle.load(f)
 
     for stid in nysm_network:
-        filtered_df = nysm_df[nysm_df["station"] == stid]
         for metvar in ["t2m", "u_total", "tp"]:
-            # grab climate division
             clim_div = station_to_climdiv.get(stid)
-            # load models
-            decoder_path = f"/home/aevans/nwp_bias/src/machine_learning/data/parent_models/{nwp_model}/exclusion_buffer/{clim_div}_{metvar}_{stid}_decoder.pth"
-            encoder_path = f"/home/aevans/nwp_bias/src/machine_learning/data/parent_models/{nwp_model}/exclusion_buffer{clim_div}_{metvar}_{stid}_encoder.pth"
+            decoder_path = f"/home/aevans/inference_ai2es_forecast_err/MODELS/{clim_div}_{metvar}_{stid}_decoder.pth"
+            encoder_path = f"/home/aevans/inference_ai2es_forecast_err/MODELS/{clim_div}_{metvar}_{stid}_encoder.pth"
 
-            # load model
-            # Initialize multi-task learning model with one encoder and decoders for each station
             model = encode_decode_lstm.ShallowLSTM_seq2seq_multi_task(
                 num_sensors=144,
                 hidden_units=1728,
@@ -63,45 +57,63 @@ def main(now):
             ).to(device)
 
             if os.path.exists(encoder_path):
-                print("Loading Encoder Model")
+                print(f"Loading Encoder Model for {stid} / {metvar}")
                 model.encoder.load_state_dict(torch.load(encoder_path), strict=False)
 
             if os.path.exists(decoder_path):
-                print("Loading Decoder Model")
+                print(f"Loading Decoder Model for {stid} / {metvar}")
                 model.decoder.load_state_dict(torch.load(decoder_path), strict=False)
 
-            for fh in np.arange(1, 19):
-                # load nwp data
-                print("-- loading data from HRRR --")
-                hrrr_df = hrrr_data_rapids.read_hrrr_data(str(fh).zfill(2), year)
+            lstm_df, features, stations, target, valid_times = prepare_lstm_data_rapids.prepare_lstm_data(
+                nysm_df, hrrr_df
+            )
 
-                # prepare data for LSTM
-                (lstm_df, features, stations, target, valid_times) = (
-                    prepare_lstm_data_rapids.prepare_lstm_data(filtered_df, hrrr_df)
-                )
+            lstm_dataset = sequencer.SequenceDatasetMultiTask(
+                dataframe=lstm_df,
+                target=target,
+                features=features,
+                sequence_length=30,
+                forecast_steps=fh,
+                device=device,
+                nwp_model=nwp_model,
+                metvar=metvar,
+            )
 
-                lstm_dataset = sequencer.SequenceDatasetMultiTask(
-                    dataframe=lstm_df,
-                    target=target,
-                    features=features,
-                    sequence_length=30,
-                    forecast_steps=fh,
-                    device=device,
-                    nwp_model=nwp_model,
-                    metvar=metvar,
-                )
-                lstm_kwargs = {
-                    "batch_size": 1,
-                    "pin_memory": False,
-                    "shuffle": False,
-                }
-                lstm_loader = torch.utils.data.DataLoader(lstm_dataset, **lstm_kwargs)
+            lstm_loader = torch.utils.data.DataLoader(
+                lstm_dataset,
+                batch_size=32,
+                pin_memory=True,
+                shuffle=False,
+            )
 
-                # predict for model
-                lstm_output = model.predict(data_loader=lstm_loader)
+            lstm_output = model.predict(data_loader=lstm_loader)
 
-                # augment lstm output
+            # TODO: Add logic to augment or save output here
 
-                # save_lstm_output
 
-    end_time = init_end_event.record()
+    end_event.record()
+    torch.cuda.synchronize()
+    print(f"Inference Completed in {start_event.elapsed_time(end_event) / 1000:.2f} seconds")
+
+    '''
+    END OF MAIN
+    '''
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--fh", type=int, required=True, help="Target Forecast Hour"
+    )
+    parser.add_argument(
+        "--device_id",
+        type=int,
+        required=True,
+        help="Device to use (e.g., 'cuda:0', 'cuda:1', 'cpu')",
+    )
+    args = parser.parse_args()
+    now = datetime.now()
+    # try:
+    main(now, args.fh)
+    # except Exception as e:
+    print("🔥 Runtime Error:", str(e))
