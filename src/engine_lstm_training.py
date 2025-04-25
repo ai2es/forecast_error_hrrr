@@ -133,14 +133,10 @@ def main(
     print(clim_div)
 
     nysm_df = nysm_data.load_nysm_data(year)
-    clim_df = pd.read_csv('/home/aevans/nwp_bias/src/landtype/data/nysm.csv')
+    clim_df = pd.read_csv("/home/aevans/nwp_bias/src/landtype/data/nysm.csv")
     clim_df_filt = clim_df[clim_df["climate_division_name"] == clim_div]
 
-    stations_in_div = (
-        clim_df_filt['stid']
-        .unique()
-        .tolist()
-    )
+    stations_in_div = clim_df_filt["stid"].unique().tolist()
     print(stations_in_div)
     for stid in stations_in_div:
         print(stid)
@@ -151,12 +147,8 @@ def main(
             decoder_path_og = f"/home/aevans/nwp_bias/src/machine_learning/data/parent_models/{nwp_model}/s2s/{clim_div}/{clim_div}_{metvar}_{stid}_decoder.pth"
             encoder_path_og = f"/home/aevans/nwp_bias/src/machine_learning/data/parent_models/{nwp_model}/s2s/{clim_div}/{clim_div}_{metvar}_{stid}_encoder.pth"
 
-            decoder_path = (
-                f"/home/aevans/inference_ai2es_forecast_err/MODELS/{clim_div}_{metvar}_{stid}_decoder.pth"
-            )
-            encoder_path = (
-                f"/home/aevans/inference_ai2es_forecast_err/MODELS/{clim_div}_{metvar}_{stid}_encoder.pth"
-            )
+            decoder_path = f"/home/aevans/inference_ai2es_forecast_err/MODELS/{clim_div}_{metvar}_{stid}_decoder.pth"
+            encoder_path = f"/home/aevans/inference_ai2es_forecast_err/MODELS/{clim_div}_{metvar}_{stid}_encoder.pth"
 
             # prepare data for LSTM
             (lstm_df, features, stations, target, valid_times) = (
@@ -186,9 +178,7 @@ def main(
                 "collate_fn": custom_collate,
             }
 
-            train_loader = torch.utils.data.DataLoader(
-                train_dataset, **train_kwargs
-            )
+            train_loader = torch.utils.data.DataLoader(train_dataset, **train_kwargs)
             print("!! Data Loaders Succesful !!")
 
             init_start_event = torch.cuda.Event(enable_timing=True)
@@ -286,7 +276,7 @@ def main(
             print("... completed ...")
             gc.collect()
             torch.cuda.empty_cache()
-                # End of MAIN
+            # End of MAIN
 
 
 if __name__ == "__main__":
@@ -329,7 +319,6 @@ if __name__ == "__main__":
         else:
             fh_r = 1
             flag = 0
-        # try:
         print(f"-- Loading data from HRRR for FH {fh_r} --")
         hrrr_df = hrrr_data.read_hrrr_data(str(fh_r).zfill(2), year)
         main(
@@ -346,6 +335,3 @@ if __name__ == "__main__":
         )
         gc.collect()
         fh = fh[fh != fh_r]  # removes used FH by value
-        # except Exception as e:
-        #     print(f"-- ERROR ERROR --")
-        #     print(e)

@@ -7,7 +7,13 @@ import pandas as pd
 import numpy as np
 import statistics as st
 
-from model_data import nysm_data, hrrr_data, encode, get_closest_nysm_stations, get_error
+from model_data import (
+    nysm_data,
+    hrrr_data,
+    encode,
+    get_closest_nysm_stations,
+    get_error,
+)
 
 
 def create_geo_dict(geo_df, c, df1):
@@ -104,9 +110,7 @@ def prepare_lstm_data(nysm_df, hrrr_df, station, metvar, train=False):
 
     # load geo cats
     geo_df = pd.read_csv("/home/aevans/nwp_bias/src/landtype/data/lstm_clusters.csv")
-    stations = get_closest_nysm_stations.get_closest_stations_csv(
-        station
-    )
+    stations = get_closest_nysm_stations.get_closest_stations_csv(station)
     print(stations)
 
     hrrr_df1 = hrrr_df[hrrr_df["station"].isin(stations)]
@@ -158,15 +162,17 @@ def prepare_lstm_data(nysm_df, hrrr_df, station, metvar, train=False):
     ]
     for k, r in new_df.items():
         if k in cols or any(sub in k for sub in cols) or "images" in k:
-            print(k)
+            print(f"Skipping: {k}")
             continue
         else:
-            print(k)
-            means = st.mean(new_df[k])
-            stdevs = st.pstdev(new_df[k])
-            new_df[k] = (new_df[k] - means) / stdevs
+            print(f"Normalizing: {k}")
+            means = st.mean(new_df[k].dropna())
+            stdevs = st.pstdev(new_df[k].dropna())
+            if stdevs != 0:
+                new_df[k] = (new_df[k] - means) / stdevs
+            else:
+                print(f"Standard deviation is zero for column: {k}. Leaving as-is.")
 
-    # features = [c for c in new_df.columns if c != 'target_error']
     features = [
         c
         for c in new_df.columns
@@ -178,5 +184,6 @@ def prepare_lstm_data(nysm_df, hrrr_df, station, metvar, train=False):
     target_sensor = "target_error"
     forecast_lead = 0
     target = f"{target_sensor}"
+    lstm_df.dropna()
 
     return lstm_df, features, stations, target, valid_times

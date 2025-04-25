@@ -171,7 +171,10 @@ def main(year, start_month):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--start_month", type=int, required=True, help="Month-- of year to grab data for"
+        "--start_month",
+        type=int,
+        required=True,
+        help="Month-- of year to grab data for",
     )
     parser.add_argument(
         "--year", type=int, required=True, help="Year-- to grab data for"

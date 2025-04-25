@@ -5,22 +5,26 @@ from sklearn import preprocessing
 from sklearn import utils
 import ast
 
+
 def get_closest_stations_csv(target_station):
     # Load the lookup DataFrame
-    look_up_df = pd.read_parquet('/home/aevans/inference_ai2es_forecast_err/MODELS/lookups/traingulate_nysm.parquet')
+    look_up_df = pd.read_parquet(
+        "/home/aevans/inference_ai2es_forecast_err/MODELS/lookups/traingulate_nysm.parquet"
+    )
 
     # Filter the DataFrame for the target station
-    row = look_up_df[look_up_df['station'] == target_station]
+    row = look_up_df[look_up_df["station"] == target_station]
 
     if row.empty:
         print(f"[WARNING] No match found for station: {target_station}")
         return []
 
     # Decode byte string and parse it into a list
-    byte_str = row.iloc[0]['closest_stations']
-    closest = ast.literal_eval(byte_str.decode('utf-8'))
+    byte_str = row.iloc[0]["closest_stations"]
+    closest = ast.literal_eval(byte_str.decode("utf-8"))
 
     return closest
+
 
 def get_closest_stations(nysm_df, neighbors, target_station, nwp_model):
     # Earth's radius in kilometers
@@ -70,27 +74,25 @@ def get_closest_stations(nysm_df, neighbors, target_station, nwp_model):
     return utilize_ls
 
 
-
 def main():
-    climdf = pd.read_csv('/home/aevans/nwp_bias/src/landtype/data/nysm.csv')
-    climdf = climdf.rename(columns={"lat [degrees]": "lat", "lon [degrees]": "lon", "stid": "station"})
-    stations = climdf['station'].unique()
+    climdf = pd.read_csv("/home/aevans/nwp_bias/src/landtype/data/nysm.csv")
+    climdf = climdf.rename(
+        columns={"lat [degrees]": "lat", "lon [degrees]": "lon", "stid": "station"}
+    )
+    stations = climdf["station"].unique()
 
     master_ls = []
 
     for s in stations:
         utilize_ls = get_closest_stations(climdf, 4, s, "HRRR")
-        master_ls.append({
-            "station": s,
-            "closest_stations": utilize_ls
-        })
+        master_ls.append({"station": s, "closest_stations": utilize_ls})
 
     master_df = pd.DataFrame(master_ls)
-    master_df.to_parquet('/home/aevans/inference_ai2es_forecast_err/MODELS/lookups/traingulate_nysm.parquet')
+    master_df.to_parquet(
+        "/home/aevans/inference_ai2es_forecast_err/MODELS/lookups/traingulate_nysm.parquet"
+    )
     return master_df  # or print(master_df)
 
 
 if __name__ == "__main__":
     main()
-
-

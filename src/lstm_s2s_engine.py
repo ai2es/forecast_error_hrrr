@@ -7,7 +7,7 @@ import panas as pd
 import numpy as np
 import os
 
-from model_data import nysm_data, hrrr_data, prepare_lstm_data
+from model_data import nysm_data_rapids, hrrr_data, prepare_lstm_data
 
 from model_architecture import encode_decode_lstm, sequencer
 import pickle
@@ -30,19 +30,22 @@ def main(now):
     outpath = "/home/aevans/inference/FINAL_OUTPUT"
 
     # load NYSM data
-    nysm_df = nysm_data.load_nysm_data(year)
+    nysm_df = nysm_data_rapids.load_nysm_data(year)
     nysm_df.reset_index(inplace=True)
 
     nysm_network = nysm_df["station"].unique().tolist()
 
-    #load clim_div_dict
-    with open('/home/aevans/inference_ai2es_forecast_err/MODELS/lookups/station_to_climdiv.pkl', 'rb') as f:
+    # load clim_div_dict
+    with open(
+        "/home/aevans/inference_ai2es_forecast_err/MODELS/lookups/station_to_climdiv.pkl",
+        "rb",
+    ) as f:
         loaded_dict = pickle.load(f)
 
     for stid in nysm_network:
         filtered_df = nysm_df[nysm_df["station"] == stid]
         for metvar in ["t2m", "u_total", "tp"]:
-            #grab climate division
+            # grab climate division
             clim_div = station_to_climdiv.get(stid)
             # load models
             decoder_path = f"/home/aevans/nwp_bias/src/machine_learning/data/parent_models/{nwp_model}/exclusion_buffer/{clim_div}_{metvar}_{stid}_decoder.pth"
@@ -70,11 +73,11 @@ def main(now):
             for fh in np.arange(1, 19):
                 # load nwp data
                 print("-- loading data from HRRR --")
-                hrrr_df = hrrr_data.read_hrrr_data(str(fh).zfill(2), year)
+                hrrr_df = hrrr_data_rapids.read_hrrr_data(str(fh).zfill(2), year)
 
                 # prepare data for LSTM
                 (lstm_df, features, stations, target, valid_times) = (
-                    prepare_lstm_data.prepare_lstm_data(filtered_df, hrrr_df)
+                    prepare_lstm_data_rapids.prepare_lstm_data(filtered_df, hrrr_df)
                 )
 
                 lstm_dataset = sequencer.SequenceDatasetMultiTask(

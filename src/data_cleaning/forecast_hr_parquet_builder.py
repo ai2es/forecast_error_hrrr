@@ -86,10 +86,16 @@ def main(start_date, end_date, fh):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--time1", type=datetime, required=True, help="Datetime to START pulling data from"
+        "--time1",
+        type=datetime,
+        required=True,
+        help="Datetime to START pulling data from",
     )
     parser.add_argument(
-        "--time2", type=datetime, required=True, help="Datetime to STOP pulling data from"
+        "--time2",
+        type=datetime,
+        required=True,
+        help="Datetime to STOP pulling data from",
     )
     parser.add_argument(
         "--fh", type=int, required=True, help="Forecast Hour-- to grab data for"
