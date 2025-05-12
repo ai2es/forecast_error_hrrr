@@ -19,23 +19,18 @@ from model_architecture import encode_decode_lstm, sequencer
 def linear_transform(station, clim_div, metvar, fh, lstm_output):
     # Load CSV using RAPIDS cudf
     linear_tbl = cudf.read_csv(
-        f"/home/aevans/nwp_bias/src/machine_learning/data/parent_models/HRRR/s2s/{clim_div}_{metvar}_HRRR_lookup_linear.csv"
+        f"/home/aevans/inference_ai2es_forecast_err/MODELS/{clim_div}_{metvar}_HRRR_lookup_linear.csv"
     )
-
     # Filter for the row
     row = linear_tbl[
         (linear_tbl["station"] == station) & (linear_tbl["forecast_hour"] == fh)
     ]
-
     if row.shape[0] == 0:
         raise ValueError(f"No row found for station={station}, fh={fh}")
-
     alpha1 = row["alpha"].iloc[0]
     diff1 = row["diff"].iloc[0]
-
     # Apply linear transformation
     lstm_output = (lstm_output - diff1) * alpha1
-
     return lstm_output
 
 
@@ -133,17 +128,19 @@ def main(now, fh):
                 {
                     "valid_time": now,
                     "stid": stid,
-                    "fh": fh,
                     "model_output": lstm_output_trans,
                 }
             )
 
         # Read existing file
-        muthr = cudf.read_parquet(f"{outpath}/fh{fh}_{metvar}_inference_out.parquet")
+        muthr = cudf.read_parquet(
+            f"{outpath}/fh{fh}_{metvar}_inference_out.parquet"
+        ).reset_index()
         # Convert new output list to cuDF DataFrame
         child = cudf.DataFrame(outs)
         # Concatenate
         muthr = cudf.concat([muthr, child], ignore_index=True)
+        muthr.set_index(["valid_time", "stid"], inplace=True)
         # Save updated file
         muthr.to_parquet(f"{outpath}/fh{fh}_{metvar}_inference_out.parquet")
 
@@ -168,6 +165,7 @@ if __name__ == "__main__":
         help="Device to use (e.g., 'cuda:0', 'cuda:1', 'cpu')",
     )
     args = parser.parse_args()
+    now = datetime.now()
     now = now.replace(minute=0, second=0, microsecond=0)
     # try:
     main(now, args.fh)
