@@ -11,18 +11,31 @@ from data_cleaning import (
 
 
 def run_forecast_hour_tasks(fh, year, month, day, model):
+    # Ensure the forecast hour is treated as an integer
     fh = int(fh)
 
+    # Determine the start date:
+    # If the current month is January, the start date is December 1 of the previous year
     if month == 1:
-        start_dt = datetime(year - 1, 12, 1)
+        start_dt = datetime(int(year - 1), 12, 1)
     else:
-        start_dt = datetime(year, month - 1, 1)
+        # Otherwise, use the 1st day of the previous month in the same year
+        start_dt = datetime(year, int(month - 1), 1)
 
-    end_day = min(day + 1, monthrange(year, month)[1])
+    # Determine the end date:
+    # The end day is either the next day or the last day of the current month, whichever is smaller
+    end_day = min(int(day + 1), monthrange(year, month)[1])
+    # Set end datetime to the end of that day (23:59:59)
     end_dt = datetime(year, month, end_day, 23, 59, 59)
 
+    # Log the time range for this forecast hour's processing
     print(f"[INFO] Running forecast hour {fh} from {start_dt} to {end_dt}")
+
+    # Run the function to build forecast hour data from Parquet files
     forecast_hour_parquet_builder.main(start_dt, end_dt, fh)
+
+    # Run the comparison between all models and the LSTM mesoscale model
+    # Ensures that month and forecast hour are zero-padded to two digits
     all_models_comparison_to_mesos_lstm.main(
         str(month).zfill(2), year, model, str(fh).zfill(2)
     )

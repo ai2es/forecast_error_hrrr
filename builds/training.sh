@@ -9,11 +9,12 @@
 #SBATCH --gpus-per-task=1
 #SBATCH --nodes=1                    # Run all processes on a single node
 #SBATCH --ntasks=1                   # Number of processes
-#SBATCH --array=0-2  # Adjust to number of GPUs/stations
+#SBATCH --array=0-3  # Adjust to number of GPUs/climate divisions
 #SBATCH --error=/home/aevans/slurm_error_logs/ai2es_error_%j.err
 #SBATCH --output=/home/aevans/slurm_output_logs/ai2es_log_%j.out
 
-CLIM_DIVS=("Champlain Valley" "Eastern Plateau" "Coastal")  
+CLIM_DIVS=("Champlain Valley" "St. Lawrence Valley" "Western Plateau" "Coastal") 
+
 # Replace with your 4 climate divisions
 # "St. Lawrence Valley" "Western Plateau" "Coastal" "Central Lakes" "Champlain Valley" "Eastern Plateau" "Great Lakes" "Hudson Valley" "Mohawk Valley" "Northern Plateau"
 CLIM_DIV=${CLIM_DIVS[$SLURM_ARRAY_TASK_ID]}

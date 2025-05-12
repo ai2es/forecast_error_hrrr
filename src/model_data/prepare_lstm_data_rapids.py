@@ -4,7 +4,7 @@ sys.path.append("..")
 
 import datetime
 import statistics as st
-import pandas 
+import pandas
 import cudf
 import cupy as cp
 

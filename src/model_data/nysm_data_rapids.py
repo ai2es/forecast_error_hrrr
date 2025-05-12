@@ -2,6 +2,7 @@ import cudf
 import numpy as np
 import pandas
 
+
 def load_nysm_data(start_year):
     nysm_path = "/home/aevans/nwp_bias/data/nysm/"
     nysm_1H = []

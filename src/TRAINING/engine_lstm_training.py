@@ -153,12 +153,15 @@ def main(
             filtered_df = nysm_df[nysm_df["station"] == stid]
 
             for metvar in ["t2m", "u_total", "tp"]:
-
                 # prepare data for LSTM
-                (lstm_df, features, stations, target, valid_times) = (
-                    prepare_lstm_data.prepare_lstm_data(
-                        filtered_df, hrrr_df, train=True
-                    )
+                (
+                    lstm_df,
+                    features,
+                    stations,
+                    target,
+                    valid_times,
+                ) = prepare_lstm_data.prepare_lstm_data(
+                    filtered_df, hrrr_df, train=True
                 )
 
                 (

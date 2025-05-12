@@ -1,4 +1,5 @@
 import sys
+
 sys.path.append("..")
 
 import datetime
@@ -13,6 +14,30 @@ import argparse
 from torch.utils.dlpack import from_dlpack
 from model_data import nysm_data_rapids, hrrr_data_rapids, prepare_lstm_data_rapids
 from model_architecture import encode_decode_lstm, sequencer
+
+
+def linear_transform(station, clim_div, metvar, fh, lstm_output):
+    # Load CSV using RAPIDS cudf
+    linear_tbl = cudf.read_csv(
+        f"/home/aevans/nwp_bias/src/machine_learning/data/parent_models/HRRR/s2s/{clim_div}_{metvar}_HRRR_lookup_linear.csv"
+    )
+
+    # Filter for the row
+    row = linear_tbl[
+        (linear_tbl["station"] == station) & (linear_tbl["forecast_hour"] == fh)
+    ]
+
+    if row.shape[0] == 0:
+        raise ValueError(f"No row found for station={station}, fh={fh}")
+
+    alpha1 = row["alpha"].iloc[0]
+    diff1 = row["diff"].iloc[0]
+
+    # Apply linear transformation
+    lstm_output = (lstm_output - diff1) * alpha1
+
+    return lstm_output
+
 
 def main(now, fh):
     nwp_model = "HRRR"
@@ -38,11 +63,15 @@ def main(now, fh):
     hrrr_df = hrrr_data_rapids.read_hrrr_data(str(fh).zfill(2), year)
 
     # Load station-to-climdiv mapping
-    with open("/home/aevans/inference_ai2es_forecast_err/MODELS/lookups/station_to_climdiv.pkl", "rb") as f:
+    with open(
+        "/home/aevans/inference_ai2es_forecast_err/MODELS/lookups/station_to_climdiv.pkl",
+        "rb",
+    ) as f:
         station_to_climdiv = pickle.load(f)
 
-    for stid in nysm_network:
-        for metvar in ["t2m", "u_total", "tp"]:
+    for metvar in ["t2m", "u_total", "tp"]:
+        outs = []
+        for stid in nysm_network:
             clim_div = station_to_climdiv.get(stid)
             decoder_path = f"/home/aevans/inference_ai2es_forecast_err/MODELS/{clim_div}_{metvar}_{stid}_decoder.pth"
             encoder_path = f"/home/aevans/inference_ai2es_forecast_err/MODELS/{clim_div}_{metvar}_{stid}_encoder.pth"
@@ -64,9 +93,13 @@ def main(now, fh):
                 print(f"Loading Decoder Model for {stid} / {metvar}")
                 model.decoder.load_state_dict(torch.load(decoder_path), strict=False)
 
-            lstm_df, features, stations, target, valid_times = prepare_lstm_data_rapids.prepare_lstm_data(
-                nysm_df, hrrr_df
-            )
+            (
+                lstm_df,
+                features,
+                stations,
+                target,
+                valid_times,
+            ) = prepare_lstm_data_rapids.prepare_lstm_data(nysm_df, hrrr_df)
 
             lstm_dataset = sequencer.SequenceDatasetMultiTask(
                 dataframe=lstm_df,
@@ -87,24 +120,47 @@ def main(now, fh):
             )
 
             lstm_output = model.predict(data_loader=lstm_loader)
+            print(lstm_output)
+            print(lstm_output.shape)
 
-            # TODO: Add logic to augment or save output here
+            # linear transform
+            lstm_output_trans = linear_transform(
+                stid, clim_div, metvar, fh, lstm_output
+            )
 
+            # save output
+            outs.append(
+                {
+                    "valid_time": now,
+                    "stid": stid,
+                    "fh": fh,
+                    "model_output": lstm_output_trans,
+                }
+            )
+
+        # Read existing file
+        muthr = cudf.read_parquet(f"{outpath}/fh{fh}_{metvar}_inference_out.parquet")
+        # Convert new output list to cuDF DataFrame
+        child = cudf.DataFrame(outs)
+        # Concatenate
+        muthr = cudf.concat([muthr, child], ignore_index=True)
+        # Save updated file
+        muthr.to_parquet(f"{outpath}/fh{fh}_{metvar}_inference_out.parquet")
 
     end_event.record()
     torch.cuda.synchronize()
-    print(f"Inference Completed in {start_event.elapsed_time(end_event) / 1000:.2f} seconds")
+    print(
+        f"Inference Completed in {start_event.elapsed_time(end_event) / 1000:.2f} seconds"
+    )
 
-    '''
+    """
     END OF MAIN
-    '''
+    """
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--fh", type=int, required=True, help="Target Forecast Hour"
-    )
+    parser.add_argument("--fh", type=int, required=True, help="Target Forecast Hour")
     parser.add_argument(
         "--device_id",
         type=int,
@@ -112,7 +168,7 @@ if __name__ == "__main__":
         help="Device to use (e.g., 'cuda:0', 'cuda:1', 'cpu')",
     )
     args = parser.parse_args()
-    now = datetime.now()
+    now = now.replace(minute=0, second=0, microsecond=0)
     # try:
     main(now, args.fh)
     # except Exception as e:

@@ -144,17 +144,18 @@ def main(
         hrrr_df_filt = date_filter(hrrr_df, start_time, end_time)
 
         for metvar in ["t2m", "u_total", "tp"]:
-            decoder_path_og = f"/home/aevans/nwp_bias/src/machine_learning/data/parent_models/{nwp_model}/s2s/{clim_div}/{clim_div}_{metvar}_{stid}_decoder.pth"
-            encoder_path_og = f"/home/aevans/nwp_bias/src/machine_learning/data/parent_models/{nwp_model}/s2s/{clim_div}/{clim_div}_{metvar}_{stid}_encoder.pth"
-
             decoder_path = f"/home/aevans/inference_ai2es_forecast_err/MODELS/{clim_div}_{metvar}_{stid}_decoder.pth"
             encoder_path = f"/home/aevans/inference_ai2es_forecast_err/MODELS/{clim_div}_{metvar}_{stid}_encoder.pth"
 
             # prepare data for LSTM
-            (lstm_df, features, stations, target, valid_times) = (
-                prepare_lstm_data.prepare_lstm_data(
-                    filtered_df, hrrr_df_filt, stid, metvar, train=True
-                )
+            (
+                lstm_df,
+                features,
+                stations,
+                target,
+                valid_times,
+            ) = prepare_lstm_data.prepare_lstm_data(
+                filtered_df, hrrr_df_filt, stid, metvar, train=True
             )
             print("FEATURES", features)
             print()
@@ -197,36 +198,16 @@ def main(
                 num_stations=len(stations),
             ).to(device)
 
-            if fh == 1:
-                if os.path.exists(encoder_path_og):
-                    print("Loading Encoder Model")
-                    model.encoder.load_state_dict(
-                        torch.load(encoder_path_og), strict=False
-                    )
-                    # Example usage for encoder and decoder
-                    get_model_file_size(encoder_path_og)
+            if os.path.exists(encoder_path):
+                print("Loading Encoder Model")
+                model.encoder.load_state_dict(torch.load(encoder_path), strict=False)
+                # Example usage for encoder and decoder
+                get_model_file_size(encoder_path)
 
-                if os.path.exists(decoder_path_og):
-                    print("Loading Decoder Model")
-                    model.decoder.load_state_dict(
-                        torch.load(decoder_path_og), strict=False
-                    )
-                    get_model_file_size(decoder_path_og)
-            else:
-                if os.path.exists(encoder_path):
-                    print("Loading Encoder Model")
-                    model.encoder.load_state_dict(
-                        torch.load(encoder_path), strict=False
-                    )
-                    # Example usage for encoder and decoder
-                    get_model_file_size(encoder_path)
-
-                if os.path.exists(decoder_path):
-                    print("Loading Decoder Model")
-                    model.decoder.load_state_dict(
-                        torch.load(decoder_path), strict=False
-                    )
-                    get_model_file_size(decoder_path)
+            if os.path.exists(decoder_path):
+                print("Loading Decoder Model")
+                model.decoder.load_state_dict(torch.load(decoder_path), strict=False)
+                get_model_file_size(decoder_path)
 
             optimizer = torch.optim.AdamW(
                 model.parameters(), lr=learning_rate, weight_decay=weight_decay
@@ -309,24 +290,17 @@ if __name__ == "__main__":
 
     metvar_ls = ["t2m", "u_total", "tp"]
     nwp_model = "HRRR"
-    flag = 1
 
     fh_all = np.arange(1, 19)
     fh = fh_all.copy()
     while len(fh) > 0:
-        if flag == 0:
-            fh_r = random.choice(fh)
-        else:
-            fh_r = 1
-            flag = 0
-        print(f"-- Loading data from HRRR for FH {fh_r} --")
-        hrrr_df = hrrr_data.read_hrrr_data(str(fh_r).zfill(2), year)
+        fh_r = random.choice(fh)
         main(
             start_time=start_time,
             end_time=end_time,
             batch_size=1000,
             num_layers=3,
-            epochs=5000,
+            epochs=50,
             weight_decay=1e-15,
             fh=fh_r,
             clim_div=args.clim_div,

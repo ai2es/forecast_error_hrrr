@@ -3,7 +3,7 @@
 #SBATCH --account=ai2es
 #SBATCH --qos=long
 #SBATCH --partition=a100
-#SBATCH --time=1:00:00
+#SBATCH --time=0
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=40G
 #SBATCH --array=1-18                # One job for each forecast hour

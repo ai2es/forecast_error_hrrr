@@ -3,6 +3,7 @@ import os
 import numpy as np
 import gc
 
+
 def read_hrrr_data(fh, year):
     years = ["2023", "2024", "2025"]
     savedir = f"/home/aevans/nwp_bias/src/machine_learning/data/hrrr_data/fh{fh}/"
@@ -22,9 +23,13 @@ def read_hrrr_data(fh, year):
         return cudf.DataFrame().to_pandas()  # return empty if nothing found
 
     hrrr_fcast_and_error_df = cudf.concat(hrrr_fcast_and_error)
-    hrrr_fcast_and_error_df = hrrr_fcast_and_error_df.reset_index(drop=True).fillna(-999)
+    hrrr_fcast_and_error_df = hrrr_fcast_and_error_df.reset_index(drop=True).fillna(
+        -999
+    )
 
     if "new_tp" in hrrr_fcast_and_error_df.columns:
         hrrr_fcast_and_error_df = hrrr_fcast_and_error_df.drop(columns="new_tp")
 
-    return hrrr_fcast_and_error_df.to_pandas()  # maintain pandas downstream compatibility
+    return (
+        hrrr_fcast_and_error_df.to_pandas()
+    )  # maintain pandas downstream compatibility

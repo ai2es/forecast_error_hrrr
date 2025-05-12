@@ -69,21 +69,14 @@ def add_suffix(master_df, station):
 
 
 def dataframe_wrapper(stations, df):
-    print("FUNC")
     master_df = df[df["station"] == stations[0]]
     master_df = add_suffix(master_df, stations[0])
-    print(master_df)
     for station in stations[1:]:
         df1 = df[df["station"] == station]
         df1 = add_suffix(df1, station)
         master_df = master_df.merge(
             df1, on="valid_time", suffixes=(None, f"_{station}")
         )
-        print(master_df)
-        print()
-    print("FINAL")
-    print(master_df)
-    print()
     return master_df
 
 
@@ -111,7 +104,6 @@ def prepare_lstm_data(nysm_df, hrrr_df, station, metvar, train=False):
     # load geo cats
     geo_df = pd.read_csv("/home/aevans/nwp_bias/src/landtype/data/lstm_clusters.csv")
     stations = get_closest_nysm_stations.get_closest_stations_csv(station)
-    print(stations)
 
     hrrr_df1 = hrrr_df[hrrr_df["station"].isin(stations)]
     nysm_df1 = nysm_df[nysm_df["station"].isin(stations)]
