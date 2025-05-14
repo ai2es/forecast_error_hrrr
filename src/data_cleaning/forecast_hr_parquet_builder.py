@@ -32,6 +32,7 @@ def main(start_date, end_date, fh):
 
     # Time interval between data points
     delta = timedelta(days=1)
+    fh = str(fh).zfill(2)
 
     # Loop through the date range
     while start_date <= end_date:

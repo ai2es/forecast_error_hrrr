@@ -10,6 +10,7 @@ import os
 import torch
 import pickle
 import argparse
+import statistics as st
 
 from torch.utils.dlpack import from_dlpack
 from model_data import nysm_data_rapids, hrrr_data_rapids, prepare_lstm_data_rapids
@@ -32,6 +33,14 @@ def linear_transform(station, clim_div, metvar, fh, lstm_output):
     # Apply linear transformation
     lstm_output = (lstm_output - diff1) * alpha1
     return lstm_output
+
+def unnormal(df):
+    for c in df_out.columns:
+    vals = df_out[c].values.tolist()
+    mean = st.mean(vals)
+    std = st.pstdev(vals)
+    df_out[c] = df_out[c] * std + mean
+    return df
 
 
 def main(now, fh):

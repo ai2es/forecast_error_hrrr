@@ -1,4 +1,6 @@
 import sys
+
+sys.path.append("..")
 from datetime import datetime
 from calendar import monthrange
 import numpy as np
@@ -6,7 +8,7 @@ import numpy as np
 from data_cleaning import (
     get_resampled_nysm_data,
     all_models_comparison_to_mesos_lstm,
-    forecast_hour_parquet_builder,
+    forecast_hr_parquet_builder,
 )
 
 
@@ -32,7 +34,7 @@ def run_forecast_hour_tasks(fh, year, month, day, model):
     print(f"[INFO] Running forecast hour {fh} from {start_dt} to {end_dt}")
 
     # Run the function to build forecast hour data from Parquet files
-    forecast_hour_parquet_builder.main(start_dt, end_dt, fh)
+    forecast_hr_parquet_builder.main(start_dt, end_dt, fh)
 
     # Run the comparison between all models and the LSTM mesoscale model
     # Ensures that month and forecast hour are zero-padded to two digits
@@ -42,11 +44,13 @@ def run_forecast_hour_tasks(fh, year, month, day, model):
 
 
 if __name__ == "__main__":
-    fh = int(sys.argsv[1])
+    fh = int(sys.argv[1])
     year = int(sys.argv[2])
     month = int(sys.argv[3])
     day = int(sys.argv[4])
     model = sys.argv[5]
+
+    print(fh, year, month, day, model)
 
     # Clean NYSM data only once
     get_resampled_nysm_data.main(year, month)

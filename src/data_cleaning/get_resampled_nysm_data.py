@@ -12,11 +12,17 @@ def get_raw_nysm_data(year, start_month):
     nysm_path = f"/home/aevans/nysm/archive/nysm/netcdf/proc/{year}/"
     file_dirs = glob.glob(f"{nysm_path}/*")
     file_dirs.sort()
-    avail_months = [int(x.split("/")[-1]) for x in file_dirs]
-    df_nysm = xr.open_mfdataset(f"{nysm_path}{str(start_month).zfill(2)}/*.nc")
-
+    df_nysm_list = []
+    for x in [start_month, int(start_month - 1)]:
+        try:
+            ds_nysm_month = xr.open_mfdataset(f"{nysm_path}{str(x).zfill(2)}/*.nc")
+            df_nysm_list.append(ds_nysm_month.to_dataframe())
+        except:
+            continue
+    df_nysm = pd.concat(df_nysm_list)
     temp = units.Quantity(df_nysm["tair"].values, "degC")
     relh = df_nysm["relh"].values / 100.0
+    dewpoint = mpcalc.dewpoint_from_relative_humidity(temp, relh)
     df_nysm["td"] = mpcalc.dewpoint_from_relative_humidity(temp, relh).magnitude
 
     altimeter_value = units.Quantity(df_nysm["pres"].values, "hPa")

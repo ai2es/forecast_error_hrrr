@@ -21,6 +21,7 @@ import matplotlib.pyplot as plt
 import datetime as datetime
 from datetime import timedelta
 import gc
+import time
 
 
 print("imports downloaded")
@@ -29,13 +30,10 @@ print("imports downloaded")
 def load_nysm_data(year):
     # these parquet files are created by running "get_resampled_nysm_data.ipynb"
     nysm_path = "/home/aevans/nwp_bias/data/nysm/"
-
     nysm_1H_obs = pd.read_parquet(f"{nysm_path}nysm_1H_obs_{year}.parquet")
-    nysm_3H_obs = pd.read_parquet(f"{nysm_path}nysm_3H_obs_{year}.parquet")
     nysm_1H_obs.fillna(-999, inplace=True)
-    nysm_3H_obs.fillna(-999, inplace=True)
     gc.collect()
-    return nysm_1H_obs, nysm_3H_obs
+    return nysm_1H_obs
 
 
 def read_data_ny(model, month, year, fh):
@@ -298,37 +296,6 @@ def get_ball_tree_indices_ny(model_data, nysm_1H_obs):
     return indices_list
 
 
-def plot_points(lon1, lat1, lon2, lat2, station):
-    import matplotlib.pyplot as plt
-    import cartopy.crs as ccrs
-    import cartopy.feature as cfeature
-
-    # Define bounding box for New York
-    bbox = [-80.0, -71.5, 40.5, 45.0]  # [lon_min, lon_max, lat_min, lat_max]
-
-    fig, ax = plt.subplots(
-        figsize=(9, 9), subplot_kw={"projection": ccrs.PlateCarree()}
-    )
-    ax.set_title(station)
-
-    # Add land, ocean, and state boundary features
-    ax.add_feature(cfeature.LAND, edgecolor="black")
-    ax.add_feature(cfeature.OCEAN, edgecolor="black")
-    ax.add_feature(cfeature.BORDERS, linestyle=":")
-    ax.add_feature(cfeature.STATES)
-
-    ax.coastlines()
-    ax.gridlines(draw_labels=True)
-
-    # Set extent to bounding box for New York
-    ax.set_extent(bbox, crs=ccrs.PlateCarree())
-    # Plot points
-    ax.scatter(lon1, (lat1), c="blue", s=100, transform=ccrs.PlateCarree())
-    ax.scatter(lon2, (lat2), c="red", s=100, transform=ccrs.PlateCarree())
-
-    plt.savefig(f"/home/aevans/nwp_bias/src/bias/lat_lon_graphs/{station}.png")
-
-
 def find_closest_station(query_lat, query_lon, df):
     """
     Find the station with the closest latitude and longitude to the given query point.
@@ -428,11 +395,6 @@ def df_with_nysm_locations(df, df_nysm, indices_list):
         # Store computed distance and station information
         distances.append(dx)
         stations.append(df_dummy["station"].iloc[0])
-
-        # Optional: Plot the matched points (commented out)
-        # plot_points(df_dummy['longitude'].iloc[0], df_dummy['latitude'].iloc[0],
-        #             df_nysm_station_locs.lon[x], df_nysm_station_locs.lat[x],
-        #             df_dummy['station'].iloc[0])
 
     # Create a temporary DataFrame to store station-distance mappings
     temp_df = pd.DataFrame({"station": stations, "distance": distances})
@@ -558,285 +520,281 @@ def main(month, year, model, fh, mask_water=True):
     savedir = f"/home/aevans/nwp_bias/src/machine_learning/data/{model}_data/fh{fh}/"
     model = model.upper()
 
-    print("Month: ", month)
-    print("Model: ", model)
-    if not os.path.exists(
-        f"{savedir}/{model}_{year}_{month}_direct_compare_to_nysm_sites_mask_water.parquet"
-    ):
-        if model == "HRRR":
-            pres = "mslma"
-        else:
-            pres = "prmsl"
+    if model == "HRRR":
+        pres = "mslma"
+    else:
+        pres = "prmsl"
 
-        nysm_1H_obs, nysm_3H_obs = load_nysm_data(year)
-        print("Loading NYSM Data")
-        gc.collect()
-        df_model_ny = read_data_ny(model, month, year, fh)
-        gc.collect()
-        print("Loading Model Data")
+    nysm_1H_obs = load_nysm_data(year)
+    print("Loading NYSM Data")
+    gc.collect()
+    df_model_ny = read_data_ny(model, month, year, fh)
+    gc.collect()
+    print("Loading Model Data")
+    t0 = time.time()
+    print(f"t0 {time.time() - start_time:.2f} seconds")
 
-        if model == "HRRR" and fh != "01":
-            print("Loading Previous Model Data")
-            previous_fh_df = read_data_ny_v2(
-                model, month, year, str(int(fh) - 1).zfill(2)
-            )
-            gc.collect()
-
-        if model == "NAM" and fh != "001":
-            print("Loading Previous Model Data")
-            previous_fh_df = read_data_ny_v2(
-                model, month, year, str(int(fh) - 1).zfill(3)
-            )
-            gc.collect()
-
-        if model == "GFS" and fh != "003":
-            print("Loading Previous Model Data")
-            previous_fh_df = read_data_ny_v2(
-                model, month, year, str(int(fh) - 3).zfill(3)
-            )
-            gc.collect()
-        if model == "HRRR":
-            # drop some info that got carried over from xarray data array
-            keep_vars = [
-                "valid_time",
-                "time",
-                "latitude",
-                "longitude",
-                "t2m",
-                "sh2",
-                "d2m",
-                "r2",
-                "u10",
-                "v10",
-                "tp",
-                pres,
-                "orog",
-                "tcc",
-                "asnow",
-                "cape",
-                "dswrf",
-                "dlwrf",
-                "gh",
-            ]
-        else:
-            # drop some info that got carried over from xarray data array
-            keep_vars = [
-                "valid_time",
-                "time",
-                "latitude",
-                "longitude",
-                "t2m",
-                "sh2",
-                "d2m",
-                "r2",
-                "u10",
-                "v10",
-                "tp",
-                pres,
-                "orog",
-                "tcc",
-                "cape",
-                "cin",
-                "dswrf",
-                "dlwrf",
-                "gh",
-            ]
-
-        if "x" in df_model_ny.keys():
-            df_model_ny = df_model_ny.drop(
-                columns=["x", "y"]
-            )  # drop x & y if they're columns since reindex will fail with them in original index
-
-        df_model_ny = df_model_ny.reset_index()[keep_vars]
-        df_model_ny = reformat_df(df_model_ny)
+    if model == "HRRR" and fh != "01":
+        print("Loading Previous Model Data")
+        previous_fh_df = read_data_ny_v2(model, month, year, str(int(fh) - 1).zfill(2))
         gc.collect()
 
-        print("--- reformatting completed ---")
-        if mask_water == True:
-            print("masking water")
-            # before interpolation or nearest neighbor methods, mask out any grid cells over water
-            df_model_ny = mask_out_water(model, df_model_ny)
+    if model == "NAM" and fh != "001":
+        print("Loading Previous Model Data")
+        previous_fh_df = read_data_ny_v2(model, month, year, str(int(fh) - 1).zfill(3))
+        gc.collect()
 
-        print("Access Information closest to NYSM")
-        if model in ["GFS", "NAM"]:
-            print("interpolating variables")
-            vars_to_interp = [
-                "valid_time",
-                "time",
-                "latitude",
-                "longitude",
-                "t2m",
-                "sh2",
-                "d2m",
-                "r2",
-                "u10",
-                "v10",
-                "u_total",
-                "u_dir",
-                "tp",
-                pres,
-                "orog",
-                "tcc",
-                "cape",
-                "cin",
-                "dswrf",
-                "dlwrf",
-                "gh",
-            ]
+    if model == "GFS" and fh != "003":
+        print("Loading Previous Model Data")
+        previous_fh_df = read_data_ny_v2(model, month, year, str(int(fh) - 3).zfill(3))
+        gc.collect()
+    t1 = time.time()
+    print(f"t1 {time.time() - t0:.2f} seconds")
+    if model == "HRRR":
+        # drop some info that got carried over from xarray data array
+        keep_vars = [
+            "valid_time",
+            "time",
+            "latitude",
+            "longitude",
+            "t2m",
+            "sh2",
+            "d2m",
+            "r2",
+            "u10",
+            "v10",
+            "tp",
+            pres,
+            "orog",
+            "tcc",
+            "asnow",
+            "cape",
+            "dswrf",
+            "dlwrf",
+            "gh",
+        ]
+    else:
+        # drop some info that got carried over from xarray data array
+        keep_vars = [
+            "valid_time",
+            "time",
+            "latitude",
+            "longitude",
+            "t2m",
+            "sh2",
+            "d2m",
+            "r2",
+            "u10",
+            "v10",
+            "tp",
+            pres,
+            "orog",
+            "tcc",
+            "cape",
+            "cin",
+            "dswrf",
+            "dlwrf",
+            "gh",
+        ]
 
-            indices_list_ny = get_ball_tree_indices_ny(df_model_ny, nysm_1H_obs)
-            gc.collect()
+    if "x" in df_model_ny.keys():
+        df_model_ny = df_model_ny.drop(
+            columns=["x", "y"]
+        )  # drop x & y if they're columns since reindex will fail with them in original index
 
-            # nearest neighbor
-            if model == "NAM":
-                df_model_nysm_sites_nn, interpolate_stations = df_with_nysm_locations(
-                    df_model_ny, nysm_1H_obs, indices_list_ny
-                )
-                if fh != "001":
-                    # nn
-                    previous_fh_df_nn, interpolate_stations = df_with_nysm_locations(
-                        previous_fh_df, nysm_1H_obs, indices_list_ny
-                    )
-                    previous_fh_df_nn.reset_index(inplace=True)
-                    # interpolation
-                    previous_fh_df = interpolate_model_data_to_nysm_locations_groupby(
-                        previous_fh_df,
-                        nysm_1H_obs,
-                        ["valid_time", "time", "latitude", "longitude", "tp"],
-                    )
-                gc.collect()
-                # interpolation
-                df_model_nysm_sites_interp = (
-                    interpolate_model_data_to_nysm_locations_groupby(
-                        df_model_ny, nysm_1H_obs, vars_to_interp
-                    )
-                )
+    df_model_ny = df_model_ny.reset_index()[keep_vars]
+    df_model_ny = reformat_df(df_model_ny)
+    gc.collect()
+    t2 = time.time()
+    print(f"t2 {time.time() - t1:.2f} seconds")
 
-            if model == "GFS":
-                df_model_nysm_sites_nn, interpolate_stations = df_with_nysm_locations(
-                    df_model_ny, nysm_3H_obs, indices_list_ny
-                )
-                if fh != "003":
-                    previous_fh_df_nn, interpolate_stations = df_with_nysm_locations(
-                        df_model_ny, nysm_3H_obs, indices_list_ny
-                    )
-                    previous_fh_df_nn.reset_index(inplace=True)
-                    # interpolation
-                    previous_fh_df = interpolate_model_data_to_nysm_locations_groupby(
-                        previous_fh_df,
-                        nysm_3H_obs,
-                        ["valid_time", "time", "latitude", "longitude", "tp"],
-                    )
-                gc.collect()
+    print("--- reformatting completed ---")
+    if mask_water == True:
+        print("masking water")
+        # before interpolation or nearest neighbor methods, mask out any grid cells over water
+        df_model_ny = mask_out_water(model, df_model_ny)
+    t3 = time.time()
+    print(f"t3 {time.time() - t2:.2f} seconds")
+    print("Access Information closest to NYSM")
+    if model in ["GFS", "NAM"]:
+        print("interpolating variables")
+        vars_to_interp = [
+            "valid_time",
+            "time",
+            "latitude",
+            "longitude",
+            "t2m",
+            "sh2",
+            "d2m",
+            "r2",
+            "u10",
+            "v10",
+            "u_total",
+            "u_dir",
+            "tp",
+            pres,
+            "orog",
+            "tcc",
+            "cape",
+            "cin",
+            "dswrf",
+            "dlwrf",
+            "gh",
+        ]
 
-                # interpolation
-                df_model_nysm_sites_interp = (
-                    interpolate_model_data_to_nysm_locations_groupby(
-                        df_model_ny, nysm_3H_obs, vars_to_interp
-                    )
-                )
+        indices_list_ny = get_ball_tree_indices_ny(df_model_ny, nysm_1H_obs)
+        gc.collect()
 
-            df_model_nysm_sites_nn["lead time"] = (
-                df_model_nysm_sites_nn["lead time"].astype(float).round(0).astype(int)
-            )
-
-            df_model_nysm_sites_nn.reset_index(inplace=True)
-
-            # join dataframes
-            # Filter out rows where 'station' is not in interpolate_stations
-            df_model_nysm_sites_nn = df_model_nysm_sites_nn[
-                ~df_model_nysm_sites_nn["station"].isin(interpolate_stations)
-            ]
-            # Filter out rows where 'station' is in interpolate_stations
-            df_model_nysm_sites_interp = df_model_nysm_sites_interp[
-                df_model_nysm_sites_interp["station"].isin(interpolate_stations)
-            ]
-
-            df_model_nysm_sites = pd.concat(
-                [df_model_nysm_sites_interp, df_model_nysm_sites_nn], axis=0
-            )
-            df_model_nysm_sites.set_index("time", inplace=True)
-            gc.collect()
-
-            if (model == "NAM" and fh != "001") or (model == "GFS" and fh != "003"):
-                # join dataframes
-                # Filter out rows where 'station' is not in interpolate_stations
-                previous_fh_df_nn = previous_fh_df_nn[
-                    ~previous_fh_df_nn["station"].isin(interpolate_stations)
-                ]
-                # Filter out rows where 'station' is in interpolate_stations
-                previous_fh_df = previous_fh_df[
-                    previous_fh_df["station"].isin(interpolate_stations)
-                ]
-
-                previous_fh_df = pd.concat([previous_fh_df, previous_fh_df_nn], axis=0)
-                previous_fh_df.set_index("time", inplace=True)
-                gc.collect()
-
-        elif model == "HRRR":
-            gc.collect()
-            indices_list_ny = get_ball_tree_indices_ny(df_model_ny, nysm_1H_obs)
-            df_model_nysm_sites, interpolate_stations = df_with_nysm_locations(
+        # nearest neighbor
+        if model == "NAM":
+            df_model_nysm_sites_nn, interpolate_stations = df_with_nysm_locations(
                 df_model_ny, nysm_1H_obs, indices_list_ny
             )
-            if fh != "01":
-                previous_fh_df, interpolate_stations = df_with_nysm_locations(
+            if fh != "001":
+                # nn
+                previous_fh_df_nn, interpolate_stations = df_with_nysm_locations(
                     previous_fh_df, nysm_1H_obs, indices_list_ny
                 )
-
-            # to avoid future issues, convert lead time to float, round, and then convert to integer
-            # without rounding first, the conversion to int will round to the floor, leading to incorrect lead times
-            df_model_nysm_sites["lead time"] = (
-                df_model_nysm_sites["lead time"].astype(float).round(0).astype(int)
+                previous_fh_df_nn.reset_index(inplace=True)
+                # interpolation
+                previous_fh_df = interpolate_model_data_to_nysm_locations_groupby(
+                    previous_fh_df,
+                    nysm_1H_obs,
+                    ["valid_time", "time", "latitude", "longitude", "tp"],
+                )
+            gc.collect()
+            # interpolation
+            df_model_nysm_sites_interp = (
+                interpolate_model_data_to_nysm_locations_groupby(
+                    df_model_ny, nysm_1H_obs, vars_to_interp
+                )
             )
+
+        if model == "GFS":
+            df_model_nysm_sites_nn, interpolate_stations = df_with_nysm_locations(
+                df_model_ny, nysm_3H_obs, indices_list_ny
+            )
+            if fh != "003":
+                previous_fh_df_nn, interpolate_stations = df_with_nysm_locations(
+                    df_model_ny, nysm_3H_obs, indices_list_ny
+                )
+                previous_fh_df_nn.reset_index(inplace=True)
+                # interpolation
+                previous_fh_df = interpolate_model_data_to_nysm_locations_groupby(
+                    previous_fh_df,
+                    nysm_3H_obs,
+                    ["valid_time", "time", "latitude", "longitude", "tp"],
+                )
             gc.collect()
 
-        if model == "GFS" and fh != "003":
-            gc.collect()
-            print("Redefining Precip")
-            previous_fh_df.reset_index(inplace=True)
-            df_model_nysm_sites = redefine_precip_intervals(
-                df_model_nysm_sites, previous_fh_df, model
+            # interpolation
+            df_model_nysm_sites_interp = (
+                interpolate_model_data_to_nysm_locations_groupby(
+                    df_model_ny, nysm_3H_obs, vars_to_interp
+                )
             )
 
-        if model == "HRRR" and fh != "01":
-            gc.collect()
-            print("Redefining Precip")
-            previous_fh_df.reset_index(inplace=True)
-            df_model_nysm_sites = redefine_precip_intervals(
-                df_model_nysm_sites, previous_fh_df, model
-            )
-        if model == "NAM" and fh != "001":
-            gc.collect()
-            print("Redefining Precip")
-            previous_fh_df.reset_index(inplace=True)
-            df_model_nysm_sites = redefine_precip_intervals(
-                df_model_nysm_sites, previous_fh_df, model
-            )
-
-        make_dirs(savedir, fh)
-        df_model_nysm_sites = df_model_nysm_sites.fillna(0)
-        gc.collect()
-        # df_model_nysm_sites.set_index(inplace=True)
-        if mask_water:
-            df_model_nysm_sites.to_parquet(
-                f"{savedir}/{model}_{year}_{month}_direct_compare_to_nysm_sites_mask_water.parquet"
-            )
-        else:
-            df_model_nysm_sites.to_parquet(
-                f"{savedir}/{model}_{year}_{month}_direct_compare_to_nysm_sites.parquet"
-            )
-
-        timer9 = time.time() - start_time
-
-        print(f"Saving New Files For :: {model} : {year}--{month}")
-        print("--- %s seconds ---" % (timer9))
-    else:
-        print(
-            f"{model}_{year}_{month}_direct_compare_to_nysm_sites_mask_water.parquet already compiled"
+        df_model_nysm_sites_nn["lead time"] = (
+            df_model_nysm_sites_nn["lead time"].astype(float).round(0).astype(int)
         )
-        print("... exiting ...")
-        exit
+
+        df_model_nysm_sites_nn.reset_index(inplace=True)
+
+        # join dataframes
+        # Filter out rows where 'station' is not in interpolate_stations
+        df_model_nysm_sites_nn = df_model_nysm_sites_nn[
+            ~df_model_nysm_sites_nn["station"].isin(interpolate_stations)
+        ]
+        # Filter out rows where 'station' is in interpolate_stations
+        df_model_nysm_sites_interp = df_model_nysm_sites_interp[
+            df_model_nysm_sites_interp["station"].isin(interpolate_stations)
+        ]
+
+        df_model_nysm_sites = pd.concat(
+            [df_model_nysm_sites_interp, df_model_nysm_sites_nn], axis=0
+        )
+        df_model_nysm_sites.set_index("time", inplace=True)
+        gc.collect()
+
+        if (model == "NAM" and fh != "001") or (model == "GFS" and fh != "003"):
+            # join dataframes
+            # Filter out rows where 'station' is not in interpolate_stations
+            previous_fh_df_nn = previous_fh_df_nn[
+                ~previous_fh_df_nn["station"].isin(interpolate_stations)
+            ]
+            # Filter out rows where 'station' is in interpolate_stations
+            previous_fh_df = previous_fh_df[
+                previous_fh_df["station"].isin(interpolate_stations)
+            ]
+
+            previous_fh_df = pd.concat([previous_fh_df, previous_fh_df_nn], axis=0)
+            previous_fh_df.set_index("time", inplace=True)
+            gc.collect()
+
+    elif model == "HRRR":
+        gc.collect()
+        t4 = time.time()
+        print(f"t4 {time.time() - t3:.2f} seconds")
+        indices_list_ny = get_ball_tree_indices_ny(df_model_ny, nysm_1H_obs)
+        df_model_nysm_sites, interpolate_stations = df_with_nysm_locations(
+            df_model_ny, nysm_1H_obs, indices_list_ny
+        )
+        if fh != "01":
+            previous_fh_df, interpolate_stations = df_with_nysm_locations(
+                previous_fh_df, nysm_1H_obs, indices_list_ny
+            )
+
+        # to avoid future issues, convert lead time to float, round, and then convert to integer
+        # without rounding first, the conversion to int will round to the floor, leading to incorrect lead times
+        df_model_nysm_sites["lead time"] = (
+            df_model_nysm_sites["lead time"].astype(float).round(0).astype(int)
+        )
+        gc.collect()
+        t5 = time.time()
+        print(f"t5 {time.time() - t4:.2f} seconds")
+
+    if model == "GFS" and fh != "003":
+        gc.collect()
+        print("Redefining Precip")
+        previous_fh_df.reset_index(inplace=True)
+        df_model_nysm_sites = redefine_precip_intervals(
+            df_model_nysm_sites, previous_fh_df, model
+        )
+
+    if model == "HRRR" and fh != "01":
+        gc.collect()
+        print("Redefining Precip")
+        previous_fh_df.reset_index(inplace=True)
+        df_model_nysm_sites = redefine_precip_intervals(
+            df_model_nysm_sites, previous_fh_df, model
+        )
+        t6 = time.time()
+        print(f"t6 {time.time() - t5:.2f} seconds")
+    if model == "NAM" and fh != "001":
+        gc.collect()
+        print("Redefining Precip")
+        previous_fh_df.reset_index(inplace=True)
+        df_model_nysm_sites = redefine_precip_intervals(
+            df_model_nysm_sites, previous_fh_df, model
+        )
+
+    make_dirs(savedir, fh)
+    df_model_nysm_sites = df_model_nysm_sites.fillna(0)
+    gc.collect()
+    # df_model_nysm_sites.set_index(inplace=True)
+    if mask_water:
+        df_model_nysm_sites.to_parquet(
+            f"{savedir}/{model}_{year}_{month}_direct_compare_to_nysm_sites_mask_water.parquet"
+        )
+    else:
+        df_model_nysm_sites.to_parquet(
+            f"{savedir}/{model}_{year}_{month}_direct_compare_to_nysm_sites.parquet"
+        )
+    t7 = time.time()
+    timer9 = time.time() - start_time
+    print(f"Saving completed in {time.time() - t6:.2f} seconds")
+    print(f"Saving New Files For :: {model} : {year}--{month}")
+    print("--- %s seconds ---" % (timer9))
 
 
 ####   END OF MAIN
