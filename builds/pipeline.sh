@@ -12,6 +12,7 @@
 #SBATCH --output=/home/aevans/slurm_output_logs/ai2es_log_%j.out
 
 # Clean data (will only run if it finishes successfully)
+bash /home/aevans/inference_ai2es_forecast_err/builds/resample_nysm.sh && \
 bash /home/aevans/inference_ai2es_forecast_err/builds/clean_meteo_data.sh && \
 # Run the next script only if the clean data script finishes successfully
 bash /home/aevans/inference_ai2es_forecast_err/builds/inference_cast.sh && \

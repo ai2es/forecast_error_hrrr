@@ -3,85 +3,58 @@ from datetime import datetime, timedelta, date
 import numpy as np
 import multiprocessing as mp
 import os
+import cudf  # RAPIDS cuDF
 
 
 def make_dirs(year, month, day, fh):
-    if not os.path.exists(f"/home/aevans/ai2es/lstm/HRRR/fh_{fh}/"):
-        os.makedirs(f"/home/aevans/ai2es/lstm/HRRR/fh_{fh}/")
-    if not os.path.exists(f"/home/aevans/ai2es/lstm/HRRR/fh_{fh}/{year}/"):
-        os.makedirs(f"/home/aevans/ai2es/lstm/HRRR/fh_{fh}/{year}/")
-    if not os.path.exists(f"/home/aevans/ai2es/lstm/HRRR/fh_{fh}/{year}/{month}/"):
-        os.makedirs(f"/home/aevans/ai2es/lstm/HRRR/fh_{fh}/{year}/{month}/")
+    base_path = f"/home/aevans/ai2es/lstm/HRRR/fh_{fh}/{year}/{month}/"
+    os.makedirs(base_path, exist_ok=True)
 
 
 def main(start_date, end_date, fh):
-    """
-    Process HRRR data for a specified date range and forecast hour.
-
-    Parameters:
-    - start_date (datetime): The start date of the data range.
-    - end_date (datetime): The end date of the data range.
-    - fh (str): The forecast hour.
-
-    Returns:
-    None
-    """
-
-    # Output directory for cleaned data
     savedir = "/home/aevans/ai2es/cleaned/HRRR/"
-
-    # Time interval between data points
     delta = timedelta(days=1)
     fh = str(fh).zfill(2)
 
-    # Loop through the date range
     while start_date <= end_date:
-        the_df = pd.DataFrame()
+        the_df = cudf.DataFrame()
         my_date = start_date
         my_time = my_date + timedelta(hours=int(fh))
 
-        # Loop through 24 hours of the day
-        for i in np.arange(0, 24):
-            my_time = str(my_time)
-            print(my_time)
+        for i in range(24):
             init = str(i).zfill(2)
-            month = str(my_date.strftime("%m"))
-            year = str(my_date.strftime("%Y"))
-            day = str(my_date.strftime("%d"))
+            month = my_date.strftime("%m")
+            year = my_date.strftime("%Y")
+            day = my_date.strftime("%d")
+            my_time_str = str(my_time)
 
-            # Check if the file exists for the given date and forecast hour
-            if not os.path.exists(
+            file_path = (
                 f"{savedir}{year}/{month}/{year}{month}{day}_hrrr.t{init}z_{fh}.parquet"
-            ):
-                continue
-            else:
-                # Read the data from the parquet file
-                try:
-                    df = pd.read_parquet(
-                        f"{savedir}{year}/{month}/{year}{month}{day}_hrrr.t{init}z_{fh}.parquet"
-                    ).reset_index()
-                except:
-                    print(
-                        f"Failed to open {savedir}{year}/{month}/{year}{month}{day}_hrrr.t{init}z_{fh}.parquet"
-                    )
-                    start_date += delta
-                    continue
-                # Filter data for the specific time
-                new_df = df[df["valid_time"] == my_time]
-                the_df = pd.concat([new_df, the_df])
+            )
 
-                # Increment time by 1 hour
-                time_obj = datetime.strptime(my_time, "%Y-%m-%d %H:%M:%S")
-                my_time = time_obj + timedelta(hours=1)
+            if not os.path.exists(file_path):
+                continue
+
+            try:
+                df = cudf.read_parquet(file_path).reset_index()
+            except Exception:
+                print(f"Failed to open {file_path}")
+                start_date += delta
+                continue
+
+            # Filter for the exact valid_time
+            new_df = df[df["valid_time"] == my_time_str]
+            the_df = cudf.concat([new_df, the_df])
+
+            my_time += timedelta(hours=1)
 
         start_date += delta
-
         make_dirs(year, month, day, fh)
-        # Reverse the order of rows and save the data to a new parquet file
-        the_df = the_df.iloc[::-1]
-        the_df.to_parquet(
-            f"/home/aevans/ai2es/lstm/HRRR/fh_{fh}/{year}/{month}/{year}{month}{day}_hrrr_fh{fh}.parquet"
-        )
+
+        # Reverse and save
+        the_df = the_df[::-1]
+        out_path = f"/home/aevans/ai2es/lstm/HRRR/fh_{fh}/{year}/{month}/{year}{month}{day}_hrrr_fh{fh}.parquet"
+        the_df.to_parquet(out_path)
 
 
 if __name__ == "__main__":

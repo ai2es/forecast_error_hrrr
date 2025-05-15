@@ -5,6 +5,7 @@ import glob
 import numpy as np
 import metpy.calc as mpcalc
 from metpy.units import units
+import argparse
 
 
 def get_raw_nysm_data(year, start_month):
@@ -13,8 +14,9 @@ def get_raw_nysm_data(year, start_month):
     file_dirs = glob.glob(f"{nysm_path}/*")
     file_dirs.sort()
     df_nysm_list = []
-    for x in [start_month, int(start_month - 1)]:
+    for x in [int(start_month - 1), start_month]:
         try:
+            print(x)
             ds_nysm_month = xr.open_mfdataset(f"{nysm_path}{str(x).zfill(2)}/*.nc")
             df_nysm_list.append(ds_nysm_month.to_dataframe())
         except:
@@ -130,7 +132,6 @@ def get_nysm_dataframe_for_resampled(df_nysm, freq):
     wind_dfs = []
 
     for var in nysm_vars:
-        print(var)
         if var == "precip_total":
             precip_dfs.append(get_resampled_precip_data(df_nysm[var], freq, "sum"))
         elif var == "wspd_sonic":
@@ -177,7 +178,7 @@ def main(year, start_month):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--start_month",
+        "--month",
         type=int,
         required=True,
         help="Month-- of year to grab data for",
@@ -186,4 +187,4 @@ if __name__ == "__main__":
         "--year", type=int, required=True, help="Year-- to grab data for"
     )
     args = parser.parse_args()
-    main(args.year, args.start_month)
+    main(args.year, args.month)

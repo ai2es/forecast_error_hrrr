@@ -22,65 +22,54 @@ import datetime as datetime
 from datetime import timedelta
 import gc
 import time
-
-
-print("imports downloaded")
+import pickle
+import cudf
 
 
 def load_nysm_data(year):
-    # these parquet files are created by running "get_resampled_nysm_data.ipynb"
     nysm_path = "/home/aevans/nwp_bias/data/nysm/"
-    nysm_1H_obs = pd.read_parquet(f"{nysm_path}nysm_1H_obs_{year}.parquet")
-    nysm_1H_obs.fillna(-999, inplace=True)
-    gc.collect()
-    return nysm_1H_obs
+    nysm_1H_obs = cudf.read_parquet(f"{nysm_path}nysm_1H_obs_{year}.parquet")
+    nysm_1H_obs = nysm_1H_obs.fillna(-999)
+    return nysm_1H_obs.to_pandas()  # ← convert back to pandas
 
 
 def read_data_ny(model, month, year, fh):
     cleaned_data_path = f"/home/aevans/ai2es/lstm/{model.upper()}/fh_{fh}/"
-
-    filelist = glob.glob(f"{cleaned_data_path}{year}/{month}/*.parquet")
-    filelist.sort()
+    filelist = sorted(glob.glob(f"{cleaned_data_path}{year}/{month}/*.parquet"))
 
     li = []
     for filename in filelist:
         try:
-            df_temp = pd.read_parquet(filename)
-            li.append(
-                df_temp.reset_index()
-            )  # reset the index in case indices are different among files
-            gc.collect()
-        except:
+            df_temp = cudf.read_parquet(filename)
+            df_temp.reset_index(drop=True, inplace=True)
+            li.append(df_temp)
+        except Exception as e:
+            print(f"Skipping file {filename}: {e}")
             continue
 
-    df = pd.concat(li)
-    gc.collect()
-    return df
+    df = cudf.concat(li)
+    return df.to_pandas()  # ← convert back to pandas
 
 
 def read_data_ny_v2(model, month, year, fh):
     cleaned_data_path = f"/home/aevans/ai2es/lstm/{model.upper()}/fh_{fh}/"
-
-    filelist = glob.glob(f"{cleaned_data_path}{year}/{month}/*.parquet")
-    filelist.sort()
+    filelist = sorted(glob.glob(f"{cleaned_data_path}{year}/{month}/*.parquet"))
 
     li = []
     for filename in filelist:
         try:
-            df_temp = pd.read_parquet(
-                filename, columns=["valid_time", "time", "tp", "latitude", "longitude"]
+            df_temp = cudf.read_parquet(
+                filename,
+                columns=["valid_time", "time", "tp", "latitude", "longitude"],
             )
-            df_temp.reset_index(inplace=True, drop=True)
-            li.append(
-                df_temp
-            )  # reset the index in case indices are different among files
-            gc.collect()
-        except:
+            df_temp.reset_index(drop=True, inplace=True)
+            li.append(df_temp)
+        except Exception as e:
+            print(f"Skipping file {filename}: {e}")
             continue
 
-    df = pd.concat(li)
-    gc.collect()
-    return df
+    df = cudf.concat(li)
+    return df.to_pandas()  # ← convert back to pandas
 
 
 def make_dirs(save_dir, fh):
@@ -279,137 +268,33 @@ def haversine(lon1, lat1, lon2, lat2):
     return km
 
 
-def get_ball_tree_indices_ny(model_data, nysm_1H_obs):
-    locations_a, locations_b = get_locations_for_ball_tree(model_data, nysm_1H_obs)
-    # Takes the first group's latitude and longitude values to construct the ball tree.
-
-    ball = BallTree(
-        locations_a[["latitude_rad", "longitude_rad"]].values, metric="haversine"
-    )
-    # k: The number of neighbors to return from tree
-    k = 1
-    # Executes a query with the second group. This will also return two arrays.
-    distances, indices = ball.query(locations_b[["lat_rad", "lon_rad"]].values, k=k)
-    # get indices in a format where we can query the df
-    indices_list = [indices[x][0] for x in range(len(indices))]
-    distances_list = [distances[x][0] for x in range(len(distances))]
-    return indices_list
-
-
-def find_closest_station(query_lat, query_lon, df):
+def df_with_nysm_locations(df):
     """
-    Find the station with the closest latitude and longitude to the given query point.
-
-    Parameters:
-    query_lat (float): Latitude of the query point.
-    query_lon (float): Longitude of the query point.
-    df (pandas.DataFrame): DataFrame containing stations, latitudes, and longitudes.
-
-    Returns:
-    str: Name of the station with the closest latitude and longitude.
-    float: Latitude of the closest station.
-    float: Longitude of the closest station.
+    RAPIDS-accelerated version of the df_with_nysm_locations function.
     """
-    # Calculate distances for each station in the DataFrame
-    df["distance"] = np.sqrt(
-        (df["latitude"] - query_lat) ** 2 + (df["longitude"] - query_lon) ** 2
-    )
+    with open(
+        "/home/aevans/inference_ai2es_forecast_err/MODELS/lookups/hrrr_station_coords.pkl",
+        "rb",
+    ) as f:
+        station_coords = pickle.load(f)
 
-    # Find the station with the minimum distance
-    closest_station = df.loc[df["distance"].idxmin()]
+    # Convert the DataFrame to cuDF
+    df_gpu = cudf.from_pandas(df)
 
-    return (
-        closest_station,
-        closest_station["longitude"].iloc[0],
-        closest_station["latitude"].iloc[0],
-    )
+    # Prepare station info as a cuDF
+    station_list = []
+    for station, (lat, lon) in station_coords.items():
+        station_list.append({"station": station, "latitude": lat, "longitude": lon})
+    station_df = cudf.DataFrame(station_list)
 
+    # Merge on latitude and longitude
+    df_merged = df_gpu.merge(station_df, on=["latitude", "longitude"], how="inner")
 
-def df_with_nysm_locations(df, df_nysm, indices_list):
-    """
-    Matches and associates NYSM station locations with the closest model grid points.
+    # Set index
+    df_merged = df_merged.set_index(["station", "valid_time"])
 
-    This function:
-    - Ensures consistency with `get_locations_for_ball_tree`.
-    - Identifies the closest NYSM stations to the given model grid points.
-    - Computes distances between NYSM sites and matched grid points using the Haversine formula.
-    - Returns a DataFrame with station assignments and a list of stations requiring interpolation.
-
-    Parameters:
-    df (pd.DataFrame): The model dataset containing latitude, longitude, and valid times.
-    df_nysm (pd.DataFrame): NYSM station dataset with latitude (`lat`) and longitude (`lon`) information.
-    indices_list (list): A list of indices pointing to rows in `df` that are closest to NYSM sites.
-
-    Returns:
-    tuple:
-        - pd.DataFrame: A DataFrame indexed by `station` and `valid_time`, containing matched locations.
-        - list: A list of stations that need interpolation (i.e., those with distances > 5 km).
-    """
-
-    # Ensure the DataFrame index is reset for proper row selection
-    # df.reset_index(inplace=True)
-
-    # Drop any missing values in NYSM data and reset its index
-    df_nysm.dropna(inplace=True)
-    df_nysm.reset_index(inplace=True)
-
-    # Extract unique closest locations from the provided indices
-    df_closest_locs = df.iloc[indices_list][["latitude", "longitude"]].drop_duplicates()
-
-    # Compute the average latitude & longitude for each NYSM station
-    df_nysm_station_locs = df_nysm.groupby("station")[["lat", "lon"]].mean()
-
-    distances = []  # Store computed distances between grid points and stations
-    stations = []  # Store station names
-
-    # Iterate through each NYSM station to find the closest matching grid point
-    for x in range(len(df_nysm_station_locs.index)):
-        df_dummy = pd.DataFrame()
-
-        # Select the corresponding subset of grid points
-        temp_ = df.iloc[indices_list]
-
-        # Find the closest station to the current NYSM site
-        station_q, longitude_q, latitude_q = find_closest_station(
-            df_nysm_station_locs.lat[x], df_nysm_station_locs.lon[x], temp_
-        )
-
-        # Filter the DataFrame for the identified closest grid point
-        df_dummy = df[(df["latitude"] == latitude_q) & (df["longitude"] == longitude_q)]
-        df_dummy["station"] = df_nysm_station_locs.index[x]
-
-        # Append results to the main DataFrame
-        if x == 0:
-            df_save = df_dummy
-        else:
-            df_save = pd.concat([df_save, df_dummy])
-
-        # Compute the distance between the model grid point and the NYSM station
-        dx = haversine(
-            df_dummy["longitude"].iloc[0],
-            df_dummy["latitude"].iloc[0],
-            df_nysm_station_locs.lon[x],
-            df_nysm_station_locs.lat[x],
-        )
-
-        # Store computed distance and station information
-        distances.append(dx)
-        stations.append(df_dummy["station"].iloc[0])
-
-    # Create a temporary DataFrame to store station-distance mappings
-    temp_df = pd.DataFrame({"station": stations, "distance": distances})
-
-    # Identify stations where the closest grid point is farther than 5 km
-    interpolate_stations = [
-        temp_df["station"].iloc[i]
-        for i in range(len(temp_df))
-        if temp_df["distance"].iloc[i] > 5.0
-    ]
-
-    # Set `station` and `valid_time` as the index for the final DataFrame
-    df_save = df_save.set_index(["station", "valid_time"])
-
-    return df_save, interpolate_stations
+    # Convert back to pandas if needed
+    return df_merged.to_pandas()
 
 
 def redefine_precip_intervals(data, prev_fh, model):
@@ -531,8 +416,6 @@ def main(month, year, model, fh, mask_water=True):
     df_model_ny = read_data_ny(model, month, year, fh)
     gc.collect()
     print("Loading Model Data")
-    t0 = time.time()
-    print(f"t0 {time.time() - start_time:.2f} seconds")
 
     if model == "HRRR" and fh != "01":
         print("Loading Previous Model Data")
@@ -548,8 +431,6 @@ def main(month, year, model, fh, mask_water=True):
         print("Loading Previous Model Data")
         previous_fh_df = read_data_ny_v2(model, month, year, str(int(fh) - 3).zfill(3))
         gc.collect()
-    t1 = time.time()
-    print(f"t1 {time.time() - t0:.2f} seconds")
     if model == "HRRR":
         # drop some info that got carried over from xarray data array
         keep_vars = [
@@ -605,16 +486,12 @@ def main(month, year, model, fh, mask_water=True):
     df_model_ny = df_model_ny.reset_index()[keep_vars]
     df_model_ny = reformat_df(df_model_ny)
     gc.collect()
-    t2 = time.time()
-    print(f"t2 {time.time() - t1:.2f} seconds")
 
     print("--- reformatting completed ---")
     if mask_water == True:
         print("masking water")
         # before interpolation or nearest neighbor methods, mask out any grid cells over water
         df_model_ny = mask_out_water(model, df_model_ny)
-    t3 = time.time()
-    print(f"t3 {time.time() - t2:.2f} seconds")
     print("Access Information closest to NYSM")
     if model in ["GFS", "NAM"]:
         print("interpolating variables")
@@ -733,16 +610,10 @@ def main(month, year, model, fh, mask_water=True):
 
     elif model == "HRRR":
         gc.collect()
-        t4 = time.time()
-        print(f"t4 {time.time() - t3:.2f} seconds")
-        indices_list_ny = get_ball_tree_indices_ny(df_model_ny, nysm_1H_obs)
-        df_model_nysm_sites, interpolate_stations = df_with_nysm_locations(
-            df_model_ny, nysm_1H_obs, indices_list_ny
-        )
+        # indices_list_ny = get_ball_tree_indices_ny(df_model_ny, nysm_1H_obs)
+        df_model_nysm_sites = df_with_nysm_locations(df_model_ny)
         if fh != "01":
-            previous_fh_df, interpolate_stations = df_with_nysm_locations(
-                previous_fh_df, nysm_1H_obs, indices_list_ny
-            )
+            previous_fh_df = df_with_nysm_locations(previous_fh_df)
 
         # to avoid future issues, convert lead time to float, round, and then convert to integer
         # without rounding first, the conversion to int will round to the floor, leading to incorrect lead times
@@ -750,8 +621,6 @@ def main(month, year, model, fh, mask_water=True):
             df_model_nysm_sites["lead time"].astype(float).round(0).astype(int)
         )
         gc.collect()
-        t5 = time.time()
-        print(f"t5 {time.time() - t4:.2f} seconds")
 
     if model == "GFS" and fh != "003":
         gc.collect()
@@ -768,8 +637,6 @@ def main(month, year, model, fh, mask_water=True):
         df_model_nysm_sites = redefine_precip_intervals(
             df_model_nysm_sites, previous_fh_df, model
         )
-        t6 = time.time()
-        print(f"t6 {time.time() - t5:.2f} seconds")
     if model == "NAM" and fh != "001":
         gc.collect()
         print("Redefining Precip")
@@ -790,9 +657,7 @@ def main(month, year, model, fh, mask_water=True):
         df_model_nysm_sites.to_parquet(
             f"{savedir}/{model}_{year}_{month}_direct_compare_to_nysm_sites.parquet"
         )
-    t7 = time.time()
     timer9 = time.time() - start_time
-    print(f"Saving completed in {time.time() - t6:.2f} seconds")
     print(f"Saving New Files For :: {model} : {year}--{month}")
     print("--- %s seconds ---" % (timer9))
 
