@@ -21,7 +21,7 @@ def get_closest_stations_csv(target_station):
 
     # Decode byte string and parse it into a list
     byte_str = row.iloc[0]["closest_stations"]
-    closest = ast.literal_eval(byte_str.decode("utf-8"))
+    closest = ast.literal_eval(byte_str)
 
     return closest
 

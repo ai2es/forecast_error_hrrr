@@ -15,7 +15,7 @@ def read_hrrr_data(fh, year):
             str_month = str(month).zfill(2)
             filename = f"{savedir}HRRR_{year}_{str_month}_direct_compare_to_nysm_sites_mask_water.parquet"
             if os.path.exists(filename):
-                df = cudf.read_parquet(filename)
+                df = cudf.read_parquet(filename).reset_index()
                 hrrr_fcast_and_error.append(df)
                 gc.collect()
 

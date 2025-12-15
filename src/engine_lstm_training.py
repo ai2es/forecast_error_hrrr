@@ -285,8 +285,8 @@ if __name__ == "__main__":
 
     # start_time = datetime(int(year-1), int(month-1), 1, 0, 0, 0)
     # end_time = date_time(year, int(month-1), 28, 23, 59, 0)
-    start_time = datetime(2023, 10, 1, 0, 0, 0)
-    end_time = datetime(2025, 3, 31, 23, 59, 0)
+    start_time = datetime(2018, 10, 1, 0, 0, 0)
+    end_time = datetime(2025, 5, 5, 23, 59, 0)
 
     metvar_ls = ["t2m", "u_total", "tp"]
     nwp_model = "HRRR"
@@ -301,7 +301,7 @@ if __name__ == "__main__":
             batch_size=1000,
             num_layers=3,
             epochs=50,
-            weight_decay=1e-15,
+            weight_decay=0.0,
             fh=fh_r,
             clim_div=args.clim_div,
             device=device,

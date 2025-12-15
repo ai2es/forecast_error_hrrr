@@ -16,6 +16,6 @@
 echo "[$(date)] Forecast Hour: $SLURM_ARRAY_TASK_ID"
 
 # Run the training script for the selected climate division
-apptainer run --nv /home/aevans/apptainer/rapids.sif /home/aevans/miniconda3/bin/python /home/aevans/inference_ai2es_forecast_err/src/lstm_s2s_engine.py \
+apptainer run --nv /home/aevans/apptainer/rapids.sif /home/aevans/inference_ai2es_forecast_err/src/lstm_s2s_engine.py \
     --fh $SLURM_ARRAY_TASK_ID \
     --device_id $SLURM_ARRAY_TASK_ID

@@ -2,7 +2,7 @@ import sys
 
 sys.path.append("..")
 
-import datetime
+from datetime import datetime
 import cudf
 import cupy as cp
 import numpy as np
@@ -34,12 +34,13 @@ def linear_transform(station, clim_div, metvar, fh, lstm_output):
     lstm_output = (lstm_output - diff1) * alpha1
     return lstm_output
 
+
 def unnormal(df):
     for c in df_out.columns:
-    vals = df_out[c].values.tolist()
-    mean = st.mean(vals)
-    std = st.pstdev(vals)
-    df_out[c] = df_out[c] * std + mean
+        vals = df_out[c].values.tolist()
+        mean = st.mean(vals)
+        std = st.pstdev(vals)
+        df_out[c] = df_out[c] * std + mean
     return df
 
 
@@ -62,7 +63,7 @@ def main(now, fh):
     nysm_df = nysm_data_rapids.load_nysm_data(year)
     nysm_df = nysm_df.reset_index(drop=True)
 
-    nysm_network = nysm_df["station"].unique().to_pandas().tolist()
+    nysm_network = nysm_df["station"].unique().tolist()
 
     hrrr_df = hrrr_data_rapids.read_hrrr_data(str(fh).zfill(2), year)
 
@@ -103,7 +104,11 @@ def main(now, fh):
                 stations,
                 target,
                 valid_times,
-            ) = prepare_lstm_data_rapids.prepare_lstm_data(nysm_df, hrrr_df)
+            ) = prepare_lstm_data_rapids.prepare_lstm_data(
+                nysm_df, hrrr_df, stid, metvar
+            )
+
+            print(lstm_df)
 
             lstm_dataset = sequencer.SequenceDatasetMultiTask(
                 dataframe=lstm_df,
@@ -112,14 +117,12 @@ def main(now, fh):
                 sequence_length=30,
                 forecast_steps=fh,
                 device=device,
-                nwp_model=nwp_model,
                 metvar=metvar,
             )
 
             lstm_loader = torch.utils.data.DataLoader(
                 lstm_dataset,
-                batch_size=32,
-                pin_memory=True,
+                batch_size=2,
                 shuffle=False,
             )
 
@@ -127,10 +130,10 @@ def main(now, fh):
             print(lstm_output)
             print(lstm_output.shape)
 
-            # linear transform
-            lstm_output_trans = linear_transform(
-                stid, clim_div, metvar, fh, lstm_output
-            )
+            # # linear transform
+            # lstm_output_trans = linear_transform(
+            #     stid, clim_div, metvar, fh, lstm_output
+            # )
 
             # save output
             outs.append(

@@ -2,9 +2,9 @@ import sys
 
 sys.path.append("..")
 
-import datetime
+from datetime import timedelta, datetime
 import statistics as st
-import pandas
+import pandas as pd
 import cudf
 import cupy as cp
 
@@ -43,15 +43,26 @@ def prepare_lstm_data(nysm_df, hrrr_df, station, metvar, train=False):
     hrrr_df = hrrr_df.sort_values("valid_time")
     hrrr_df["valid_time"] = cudf.to_datetime(hrrr_df["valid_time"])
 
+    # Get max valid time (cuDF Timestamp)
     current_time = hrrr_df["valid_time"].max()
 
     if not train:
-        mask = (
-            hrrr_df["valid_time"]
-            >= current_time - cudf.utils.dtypes._timedelta_from_str("29h")
-        ) & (hrrr_df["valid_time"] <= current_time)
+        # Create timedelta using pandas (this is okay for cuDF arithmetic)
+        time_window = pd.Timedelta(hours=30)
+
+        # Do the arithmetic with cuDF timestamps
+        start_time = current_time - time_window
+
+        # Create mask
+        mask = (hrrr_df["valid_time"] >= start_time) & (
+            hrrr_df["valid_time"] <= current_time
+        )
+
+        # Filter and convert to pandas to get list of timestamps
         filtered_times = hrrr_df.loc[mask, "valid_time"]
         mytimes = filtered_times.to_pandas().tolist()
+
+        # Apply to NYSM DataFrame
         nysm_df = nysm_df[nysm_df["valid_time"].isin(mytimes)]
     else:
         mytimes = hrrr_df["valid_time"].to_pandas().tolist()
@@ -86,9 +97,7 @@ def prepare_lstm_data(nysm_df, hrrr_df, station, metvar, train=False):
     valid_times = the_df["valid_time"].tolist()
     the_df = encode.encode(the_df, "valid_time", 366)
     the_df = the_df[the_df.columns.drop(list(the_df.filter(regex="station")))]
-
     new_df = the_df.drop(columns="valid_time")
-    new_df = cudf.from_pandas(new_df)  # Move back to cuDF
 
     # Normalize data
     cols = [
@@ -103,20 +112,17 @@ def prepare_lstm_data(nysm_df, hrrr_df, station, metvar, train=False):
         "slope",
     ]
 
-    for k in new_df.columns:
+    for k, r in new_df.items():
         if k in cols or any(sub in k for sub in cols) or "images" in k:
             continue
-        col = new_df[k].dropna()
-        if len(col) == 0:
-            continue
-        mean = col.mean()
-        std = col.std(ddof=0)
-        if std != 0:
-            new_df[k] = (new_df[k] - mean) / std
+        else:
+            means = st.mean(new_df[k])
+            stdevs = st.pstdev(new_df[k])
+            new_df[k] = (new_df[k] - means) / stdevs
 
     features = [c for c in new_df.columns if c != "target_error" and "images" not in c]
     target = "target_error"
     lstm_df = new_df.copy()
-    lstm_df = lstm_df.dropna()
+    # lstm_df = lstm_df.dropna()
 
-    return lstm_df.to_pandas(), features, stations, target, valid_times
+    return lstm_df, features, stations, target, valid_times

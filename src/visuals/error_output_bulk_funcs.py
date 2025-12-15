@@ -1,0 +1,1054 @@
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+
+# import seaborn as sns
+import re
+import statistics as st
+
+from datetime import datetime
+from scipy.stats import gaussian_kde
+import matplotlib.dates as mdates
+import calendar
+from sklearn.metrics import r2_score
+import os
+from matplotlib.colors import LogNorm
+
+
+def myround(x, base):
+    return base * round(x / base)
+
+
+# function to get unique values
+def unique(list1):
+    # initialize a null list
+    unique_list = []
+
+    # traverse for all elements
+    for x in list1:
+        # check if exists in unique_list or not
+        if x not in unique_list:
+            unique_list.append(x)
+    return unique_list
+
+
+def make_directory(path):
+    if not os.path.exists(path):
+        os.mkdir(path)
+
+
+def round_small(full_df, met_col, rounded_base):
+    """
+    Groups errors into temperature buckets by rounding the met_col values based on conditions and calculates the mean
+    absolute error (MAE) across all 'diff' columns for each bucket.
+
+    Parameters:
+        full_df (pd.DataFrame): DataFrame containing the data.
+        met_col (str): The column used for temperature rounding (e.g., temperature column).
+        rounded_base (int or float): The base to round small values (0 <= value < 1.0).
+
+    Returns:
+        temp_df (pd.Series): DataFrame containing the mean absolute error for each temperature bucket.
+        instances (pd.Series): Series containing the counts of instances in each temperature bucket.
+    """
+    # Step 1: Round `met_col` values based on conditions and create a list of rounded values
+    temps = []
+    for i, _ in enumerate(full_df[met_col]):
+        value = full_df[met_col].iloc[i]
+        if 0 <= value < 1.0:
+            rounded = round(value, rounded_base)
+        else:
+            rounded = myround(value, 1)
+        temps.append(rounded)
+
+    # Step 2: Identify unique temperature buckets
+    unique_temps = unique(temps)
+
+    # Step 3: Create a zero-filled DataFrame for temperature buckets
+    zeros = np.zeros(len(unique_temps))
+    rs = np.resize(zeros, (len(unique_temps), len(unique_temps)))
+    temp_df = pd.DataFrame(
+        data=rs, index=[np.arange(len(unique_temps))], columns=sorted(unique_temps)
+    )
+
+    # Step 4: Identify all 'diff' columns in the DataFrame
+    diff_columns = [col for col in full_df.columns if "diff" in col]
+
+    # Step 5: Accumulate absolute errors and instance counts into the temperature buckets
+    for i, _ in enumerate(full_df[met_col]):
+        value = full_df[met_col].iloc[i]
+        if 0 <= value < 1.0:
+            rounded = round(value, rounded_base)
+        else:
+            rounded = float(myround(value, base=1))
+
+        abs_err_sum = 0
+        valid_count = 0
+
+        # Iterate through all 'diff' columns to calculate absolute errors
+        for col in diff_columns:
+            err = full_df[col].iloc[i]
+            if abs(err) < 100:  # Exclude invalid entries
+                abs_err_sum += abs(err)
+                valid_count += 1
+
+        # Only update if at least one valid error exists
+        if valid_count > 0:
+            temp_df[rounded].iloc[0] += abs_err_sum / valid_count  # Add MAE
+            temp_df[rounded].iloc[
+                -1
+            ] += valid_count  # Increment by the number of valid instances
+
+    # Step 6: Extract instance counts and mean absolute errors
+    instances = temp_df.iloc[-1]
+    temp_df = temp_df.iloc[0]
+
+    # Step 7: Remove zero entries from both temp_df and instances
+    temp_df = temp_df.loc[~(temp_df == 0)]
+    instances = instances.loc[~(instances == 0)]
+
+    return temp_df, instances
+
+
+def err_bucket(full_df, met_col, rounded_base):
+    """
+    Groups errors into temperature buckets by rounding the met_col values and calculating the mean absolute error (MAE)
+    across all 'diff' columns.
+
+    Parameters:
+        full_df (pd.DataFrame): DataFrame containing the data.
+        met_col (str): The column used for temperature rounding (e.g., temperature column).
+        rounded_base (int or float): The base to round temperatures to for bucketing.
+
+    Returns:
+        temp_df (pd.Series): DataFrame containing the mean absolute error for each temperature bucket.
+        instances (pd.Series): Series containing the counts of instances in each temperature bucket.
+    """
+    # Step 1: Round the `met_col` values to the nearest `rounded_base`
+    temps = []
+    for i, _ in enumerate(full_df[met_col]):
+        rounded = myround(full_df[met_col].iloc[i], rounded_base)
+        if rounded >= -200:
+            temps.append(rounded)
+
+    # Step 2: Identify unique temperature buckets
+    unique_temps = unique(temps)
+
+    # Step 3: Create a zero-filled DataFrame for temperature buckets
+    zeros = np.zeros(len(unique_temps))
+    rs = np.resize(zeros, (len(unique_temps), len(unique_temps)))
+    temp_df = pd.DataFrame(
+        data=rs, index=[np.arange(len(unique_temps))], columns=sorted(unique_temps)
+    )
+
+    # Step 4: Find all 'diff' columns in the DataFrame
+    diff_columns = [col for col in full_df.columns if "diff" in col]
+    print(diff_columns)
+
+    # Step 5: Accumulate absolute errors and instance counts into the temperature buckets
+    for i, _ in enumerate(full_df[met_col]):
+        rounded = myround(full_df[met_col].iloc[i], rounded_base)
+        print(rounded)
+        if rounded >= -200:
+            abs_err_sum = 0
+            valid_count = 0
+
+            # Calculate absolute errors across all 'diff' columns
+            for col in diff_columns:
+                err = full_df[col].iloc[i]
+                if err > -100:
+                    abs_err_sum += abs(err)
+                    valid_count += 1
+
+            # Only update if at least one valid error exists
+            if valid_count > 0:
+                temp_df[rounded].iloc[0] += abs_err_sum / valid_count  # Add MAE
+                temp_df[rounded].iloc[-1] += valid_count  # Increment the instance count
+
+    print(temp_df)
+    instances = temp_df.iloc[-1]
+    temp_df = temp_df.iloc[0]
+
+    return temp_df, instances
+
+
+def plot_buckets(
+    temp_df, instances, var_name, cmap, width, title, station, clim_div, metvar
+):
+    my_cmap = plt.get_cmap(cmap)
+    averages = temp_df / instances
+    averages = averages.dropna()
+    y = averages
+    rescale = lambda y: (y - np.min(y)) / (np.max(y) - np.min(y))
+    the_list = averages.tolist()
+    fig, ax = plt.subplots(
+        figsize=(30, 10), facecolor="slategrey", constrained_layout=True
+    )
+    bars = plt.bar(temp_df.keys(), the_list, color=my_cmap(rescale(y)), width=width)
+    ax.set_title(f"NYSM Absolute Error of LSTM {clim_div}", fontsize=28, c="white")
+    ax.set_xlabel(var_name, fontsize=28, c="white")
+    ax.set_ylabel("Mean Absolute Error", fontsize=28, c="white")
+    plt.xticks(fontsize=25)
+    plt.yticks(fontsize=25)
+    # Iterating over the bars one-by-one
+    # Annotate each bar with its value
+    # Annotate each bar with the number of instances
+    for bar, value, instance_count in zip(bars, the_list, instances):
+        yval = value + 0.01  # Adjust the vertical position of the label
+        ax.text(
+            bar.get_x() + bar.get_width() / 2,
+            yval,
+            f"n={instance_count}",
+            ha="center",
+            va="bottom",
+            color="black",
+            fontsize=12,
+            rotation=90,
+        )
+    # plt.savefig(
+    #     f"/home/aevans/nwp_bias/src/machine_learning/data/error_visuals/{clim_div}/_{metvar}_met_error_{title}_radio.png"
+    # )
+
+
+def groupby_month_total(df, station, clim_div, metvar):
+    # Filter columns that contain 'diff' in their name
+    diff_columns = [col for col in df.columns if "diff" in col]
+
+    # Create an empty list to store the aggregated results
+    aggregated_results = []
+
+    # Group by month for each diff column and aggregate (e.g., mean or sum)
+    for month in range(1, 13):  # 1 to 12 for each month
+        monthly_data = []
+
+        # Collect data for all 'diff' columns for this month
+        for col in diff_columns:
+            df_filtered = df[
+                df[col].abs() < 100
+            ]  # Filter rows where column values are greater than -999
+            # Group by month and get the mean for this month
+            monthly_mean = df_filtered[df_filtered.valid_time.dt.month == month][
+                col
+            ].mean()
+            if not np.isnan(monthly_mean):
+                monthly_data.append(monthly_mean)
+
+        # If there is any data for the month, aggregate it (e.g., take the mean of the values for that month)
+        if monthly_data:
+            aggregated_results.append(
+                np.mean(monthly_data)
+            )  # You can also sum or apply other aggregations here
+
+            # ---- Create DataFrame of results ----
+    month_labels = [calendar.month_name[m] for m in range(1, 13)]
+    results_df = pd.DataFrame({"Month": month_labels, "Mean_Error": aggregated_results})
+
+    # Ensure output folder exists
+    out_dir = (
+        f"/home/aevans/nwp_bias/src/machine_learning/src/visuals/dataframes/{clim_div}"
+    )
+    os.makedirs(out_dir, exist_ok=True)
+
+    # Save DataFrame to CSV
+    csv_path = os.path.join(
+        out_dir, f"{station}_{metvar}_monthly_error_persistence.csv"
+    )
+    results_df.to_csv(csv_path, index=False)
+
+    # Plotting
+    fig, ax = plt.subplots(figsize=(30, 17))
+    x = np.arange(1, len(aggregated_results) + 1)
+
+    # Define a colormap
+    cmap = plt.get_cmap("Blues")
+
+    # Normalize data to apply the colormap
+    norm = plt.Normalize(min(aggregated_results) - 0.5, max(aggregated_results))
+    colors = cmap(norm(aggregated_results))
+
+    # Create a bar chart with color mapping
+    ax.bar(x, aggregated_results, color=colors)
+
+    # Set x-ticks and labels for months
+    ax.set_xticks(x)
+    month_labels = [calendar.month_name[month] for month in range(1, 13)]
+    ax.set_xticklabels(month_labels)
+    ax.set_xticklabels(month_labels, rotation=45)
+
+    # Add labels and title
+    ax.set_xlabel("Month", fontsize=28)
+    ax.set_ylabel("Mean LSTM Error", fontsize=28)
+    ax.set_title(
+        f"NYSM: {clim_div}\n Monthly Mean Error for LSTM Predictions", fontsize=32
+    )
+    # Customize tick mark font size
+    plt.xticks(fontsize=28)
+    plt.yticks(fontsize=28)
+
+    # Show plot
+    plt.show()
+    # plt.savefig(
+    #     f"/home/aevans/nwp_bias/src/machine_learning/data/error_visuals/{clim_div}/_{metvar}_month_error_radio.png"
+    # )
+
+
+def groupby_month_std(df, station, clim_div, metvar):
+    # Filter columns that contain 'diff' in their name
+    diff_columns = [col for col in df.columns if "diff" in col]
+
+    # Create an empty list to store the aggregated results
+    aggregated_results = []
+
+    # Group by month for each diff column and aggregate (e.g., standard deviation)
+    for month in range(1, 13):  # 1 to 12 for each month
+        monthly_data = []
+
+        # Collect data for all 'diff' columns for this month
+        for col in diff_columns:
+            df_filtered = df[
+                df[col].abs() < 100
+            ]  # Filter rows where column values are greater than -999
+            # Group by month and get the standard deviation for this month
+            monthly_std = df_filtered[df_filtered.valid_time.dt.month == month][
+                col
+            ].std()
+            if not np.isnan(monthly_std):
+                monthly_data.append(monthly_std)
+
+        # If there is any data for the month, aggregate it (e.g., take the mean of the standard deviations for that month)
+        if monthly_data:
+            aggregated_results.append(
+                np.mean(monthly_data)
+            )  # You can also sum or apply other aggregations here
+
+            # ---- Create DataFrame of results ----
+    month_labels = [calendar.month_name[m] for m in range(1, 13)]
+    results_df = pd.DataFrame({"Month": month_labels, "Mean_Error": aggregated_results})
+
+    # Ensure output folder exists
+    out_dir = (
+        f"/home/aevans/nwp_bias/src/machine_learning/src/visuals/dataframes/{clim_div}"
+    )
+    os.makedirs(out_dir, exist_ok=True)
+
+    # Save DataFrame to CSV
+    csv_path = os.path.join(
+        out_dir, f"{station}_{metvar}_monthly_error_std_persistence.csv"
+    )
+    results_df.to_csv(csv_path, index=False)
+
+    # Plotting
+    fig, ax = plt.subplots(figsize=(30, 17))
+    x = np.arange(1, len(aggregated_results) + 1)
+
+    # Define a colormap
+    cmap = plt.get_cmap("Reds")
+
+    # Normalize data to apply the colormap
+    norm = plt.Normalize(min(aggregated_results) - 0.5, max(aggregated_results))
+    colors = cmap(norm(aggregated_results))
+
+    # Create a bar chart with color mapping
+    ax.bar(x, aggregated_results, color=colors)
+
+    # Set x-ticks and labels for months
+    ax.set_xticks(x)
+    month_labels = [calendar.month_name[month] for month in range(1, 13)]
+    ax.set_xticklabels(month_labels, rotation=45)
+
+    # Add labels and title
+    ax.set_xlabel("Month", fontsize=28)
+    ax.set_ylabel("Standard Deviation of NWP Error", fontsize=28)
+    ax.set_title(
+        f"NYSM: {clim_div}\n Monthly Standard Deviation of NWP Error", fontsize=32
+    )
+    # Customize tick mark font size
+    plt.xticks(fontsize=28)
+    plt.yticks(fontsize=28)
+
+    # Show plot
+    plt.show()
+    # plt.savefig(
+    #     f"/home/aevans/nwp_bias/src/machine_learning/data/error_visuals/{clim_div}/_{metvar}_month_std_error.png"
+    # )
+
+
+def groupby_abs_month_total(df, station, clim_div, metvar):
+    # Filter columns that contain 'diff' in their name
+    diff_columns = [col for col in df.columns if "diff" in col]
+
+    # Create an empty list to store the aggregated results
+    aggregated_results = []
+
+    # Group by month for each diff column and aggregate (e.g., mean of absolute values)
+    for month in range(1, 13):  # 1 to 12 for each month
+        monthly_data = []
+
+        # Collect data for all 'diff' columns for this month
+        for col in diff_columns:
+            df_filtered = df[
+                df[col].abs() < 100
+            ]  # Filter rows where column values are greater than -999
+            # Group by month and calculate the mean of absolute values for this month
+            monthly_abs_mean = (
+                df_filtered[df_filtered.valid_time.dt.month == month][col]
+                .abs()  # Take the absolute value
+                .mean()  # Calculate the mean of absolute values
+            )
+            if not np.isnan(monthly_abs_mean):
+                monthly_data.append(monthly_abs_mean)
+
+        # If there is any data for the month, aggregate it (e.g., take the mean of the absolute values for that month)
+        if monthly_data:
+            aggregated_results.append(
+                np.mean(monthly_data)
+            )  # You can also sum or apply other aggregations here
+
+            # ---- Create DataFrame of results ----
+    month_labels = [calendar.month_name[m] for m in range(1, 13)]
+    results_df = pd.DataFrame({"Month": month_labels, "Mean_Error": aggregated_results})
+
+    # Ensure output folder exists
+    out_dir = (
+        f"/home/aevans/nwp_bias/src/machine_learning/src/visuals/dataframes/{clim_div}"
+    )
+    os.makedirs(out_dir, exist_ok=True)
+
+    # Save DataFrame to CSV
+    csv_path = os.path.join(
+        out_dir, f"{station}_{metvar}_monthly_error_abs_persistence.csv"
+    )
+    results_df.to_csv(csv_path, index=False)
+
+    # Plotting
+    fig, ax = plt.subplots(figsize=(30, 17))
+    x = np.arange(1, len(aggregated_results) + 1)
+
+    # Define a colormap
+    cmap = plt.get_cmap("Blues")
+
+    # Normalize data to apply the colormap
+    norm = plt.Normalize(min(aggregated_results) - 0.5, max(aggregated_results))
+    colors = cmap(norm(aggregated_results))
+
+    # Create a bar chart with color mapping
+    ax.bar(x, aggregated_results, color=colors)
+
+    # Set x-ticks and labels for months
+    ax.set_xticks(x)
+    month_labels = [calendar.month_name[month] for month in range(1, 13)]
+    ax.set_xticklabels(month_labels, rotation=45)
+
+    # Add labels and title
+    ax.set_xlabel("Month", fontsize=28)
+    ax.set_ylabel("Mean Absolute LSTM Error", fontsize=28)
+    ax.set_title(
+        f"NYSM: {clim_div}\n Monthly Mean Absolute Error for LSTM Predictions",
+        fontsize=32,
+    )
+    # Customize tick mark font size
+    plt.xticks(fontsize=28)
+    plt.yticks(fontsize=28)
+
+    # Show plot
+    plt.show()
+    # plt.savefig(
+    #     f"/home/aevans/nwp_bias/src/machine_learning/data/error_visuals/{clim_div}/_{metvar}_month_abs_error_radio.png"
+    # )
+
+    return aggregated_results
+
+
+def boxplot_monthly_error(df, station, clim_div, metvar):
+    # Filter columns that contain 'diff' in their name
+    diff_columns = [col for col in df.columns if "diff" in col]
+
+    # Create a dictionary to store monthly data
+    monthly_data = {month: [] for month in range(1, 13)}
+
+    # Group by month for each diff column and collect all error values
+    for col in diff_columns:
+        df_filtered = df[
+            df[col].abs() < 100
+        ]  # Filter rows where column values are greater than -999
+        for month in range(1, 13):
+            # Collect error values for the current month
+            month_values = df_filtered[df_filtered.valid_time.dt.month == month][
+                col
+            ].values
+            monthly_data[month].extend(month_values)
+
+    # Convert monthly data to a list for plotting
+    data_for_plot = [monthly_data[month] for month in range(1, 13)]
+
+    # Plotting
+    fig, ax = plt.subplots(figsize=(30, 17))
+
+    # Create a boxplot
+    ax.boxplot(data_for_plot, patch_artist=True, showfliers=True)
+
+    # Set x-ticks and labels for months
+    month_labels = [calendar.month_name[month] for month in range(1, 13)]
+    ax.set_xticks(range(1, 13))
+    ax.set_xticklabels(month_labels)
+
+    # Add labels and title
+    ax.set_xlabel("Month", fontsize=28)
+    ax.set_ylabel("NWP Error", fontsize=28)
+    ax.set_title("Monthly Box-and-Whisker Plot of Errors for NWP Error", fontsize=32)
+    # Customize tick mark font size
+    plt.xticks(fontsize=28)
+    plt.yticks(fontsize=28)
+    ax.set_xticklabels(month_labels, rotation=45)
+
+    # Show plot
+    plt.show()
+    # plt.savefig(
+    #     f"/home/aevans/nwp_bias/src/machine_learning/data/error_visuals/{clim_div}/{metvar}_month_error_boxplot_radio.png"
+    # )
+
+
+def groupby_time_abs(df, station, clim_div, metvar):
+    # Filter columns that contain 'diff' in their name
+    diff_columns = [col for col in df.columns if "diff" in col]
+
+    # Create an empty list to store the aggregated results
+    aggregated_results = []
+    valid_hours = []  # To keep track of hours that have data
+
+    # Group by hour (time of day) for each diff column and calculate the mean of absolute values
+    for hour in range(0, 24):  # 0 to 23 for each hour of the day
+        hourly_data = []
+
+        # Collect data for all 'diff' columns for this hour
+        for col in diff_columns:
+            df_filtered = df[
+                df[col].abs() < 100
+            ]  # Filter rows where column values are greater than -999
+            # Group by hour and calculate the mean of absolute values for this hour
+            hourly_abs_mean = (
+                df_filtered[df_filtered.valid_time.dt.hour == hour][col]
+                .abs()  # Take the absolute value
+                .mean()  # Calculate the mean of absolute values
+            )
+            if not np.isnan(hourly_abs_mean):
+                hourly_data.append(hourly_abs_mean)
+
+        # If there is any data for the hour, aggregate it (e.g., take the mean of the absolute values for that hour)
+        if hourly_data:
+            aggregated_results.append(
+                np.mean(hourly_data)
+            )  # Aggregate the data (mean of hourly values)
+            valid_hours.append(hour)  # Track the hour that has valid data
+
+        # ---- Create DataFrame of results ----
+    hour_labels = [f"{h:02d}:00" for h in valid_hours]
+    results_df = pd.DataFrame(
+        {"Hour": hour_labels, "Mean_Absolute_Error": aggregated_results}
+    )
+
+    # Ensure output directory exists
+    out_dir = f"/home/aevans/nwp_bias/src/machine_learning/data/error_visuals/dataframes/{clim_div}"
+    os.makedirs(out_dir, exist_ok=True)
+
+    # Save DataFrame to CSV
+    csv_path = os.path.join(
+        out_dir, f"{station}_{metvar}_hourly_abs_error_persistence.csv"
+    )
+    results_df.to_csv(csv_path, index=False)
+
+    # Plotting
+    fig, ax = plt.subplots(figsize=(30, 17))
+    x = np.arange(0, len(aggregated_results))
+
+    # Define a colormap
+    cmap = plt.get_cmap("Greens")
+
+    # Normalize data to apply the colormap
+    norm = plt.Normalize(min(aggregated_results) - 0.2, max(aggregated_results))
+    colors = cmap(norm(aggregated_results))
+
+    # Create a bar chart with color mapping
+    ax.bar(x, aggregated_results, color=colors)
+
+    # Set x-ticks and labels for valid hours
+    ax.set_xticks(x)
+    hour_labels = [f"{hour:02d}:00" for hour in valid_hours]
+    ax.set_xticklabels(hour_labels, rotation=45)
+
+    # Add labels and title
+    ax.set_xlabel("Local Time of Day (Hour)", fontsize=28)
+    ax.set_ylabel("Mean Absolute LSTM Error", fontsize=28)
+    ax.set_title(
+        f"NYSM: {clim_div} Mean Absolute Error of LSTM\n Grouped by Time of Day",
+        fontsize=32,
+    )
+
+    # Customize tick mark font size
+    plt.xticks(fontsize=28)
+    plt.yticks(fontsize=28)
+
+    # Show plot
+    plt.show()
+    # plt.savefig(
+    #     f"/home/aevans/nwp_bias/src/machine_learning/data/error_visuals/{clim_div}/_{metvar}_time_of_day_abs_error_colored_radio.png"
+    # )
+
+    return aggregated_results
+
+
+def groupby_time(df, station, clim_div, metvar):
+    # Filter columns that contain 'diff' in their name
+    diff_columns = [col for col in df.columns if "diff" in col]
+
+    # Create an empty list to store the aggregated results
+    aggregated_results = []
+    valid_hours = []  # To keep track of hours that have data
+
+    # Group by hour (time of day) for each diff column and calculate the mean
+    for hour in range(0, 24):  # 0 to 23 for each hour of the day
+        hourly_data = []
+
+        # Collect data for all 'diff' columns for this hour
+        for col in diff_columns:
+            df_filtered = df[
+                df[col].abs() < 100
+            ]  # Filter rows where column values are greater than -999
+            # Group by hour and calculate the mean for this hour
+            hourly_mean = df_filtered[df_filtered.valid_time.dt.hour == hour][
+                col
+            ].mean()
+            if not np.isnan(hourly_mean):
+                hourly_data.append(hourly_mean)
+
+        # If there is any data for the hour, aggregate it (e.g., take the mean of the values for that hour)
+        if hourly_data:
+            aggregated_results.append(
+                np.mean(hourly_data)
+            )  # Aggregate the data (mean of hourly values)
+            valid_hours.append(hour)  # Track the hour that has valid data
+
+    # ---- Create DataFrame of results ----
+    hour_labels = [f"{h:02d}:00" for h in valid_hours]
+    results_df = pd.DataFrame(
+        {"Hour": hour_labels, "Mean_Absolute_Error": aggregated_results}
+    )
+
+    # Ensure output directory exists
+    out_dir = f"/home/aevans/nwp_bias/src/machine_learning/data/error_visuals/dataframes/{clim_div}"
+    os.makedirs(out_dir, exist_ok=True)
+
+    # Save DataFrame to CSV
+    csv_path = os.path.join(out_dir, f"{station}_{metvar}_hourly_error_persistence.csv")
+    results_df.to_csv(csv_path, index=False)
+    # Plotting
+
+    fig, ax = plt.subplots(figsize=(30, 17))
+    x = np.arange(0, len(aggregated_results))
+
+    # Define a colormap
+    cmap = plt.get_cmap("Greens")
+
+    # Normalize data to apply the colormap
+    norm = plt.Normalize(min(aggregated_results) - 0.2, max(aggregated_results))
+    colors = cmap(norm(aggregated_results))
+
+    # Create a bar chart with color mapping
+    ax.bar(x, aggregated_results, color=colors)
+
+    # Set x-ticks and labels for valid hours
+    ax.set_xticks(x)
+    hour_labels = [
+        f"{hour:02d}:00" for hour in valid_hours
+    ]  # Labels for valid hours only
+    ax.set_xticklabels(hour_labels, rotation=45)
+
+    # Add labels and title
+    ax.set_xlabel("Local Time of Day (Hour)", fontsize=28)
+    ax.set_ylabel("Mean LSTM Error", fontsize=28)
+    ax.set_title(
+        f"NYSM: {clim_div} Mean LSTM Error\n Grouped by Time of Day", fontsize=32
+    )
+
+    # Customize tick mark font size
+    plt.xticks(fontsize=28)
+    plt.yticks(fontsize=28)
+
+    # Show plot
+    plt.show()
+    # plt.savefig(
+    #     f"/home/aevans/nwp_bias/src/machine_learning/data/error_visuals/{clim_div}/_{metvar}_time_of_day_mean_error_colored_radio.png"
+    # )
+
+    return aggregated_results
+
+
+def boxplot_time_of_day_error(df, station, clim_div, metvar):
+    # Filter columns that contain 'diff' in their name
+    diff_columns = [col for col in df.columns if "diff" in col]
+
+    # Create a dictionary to store hourly data
+    hourly_data = {hour: [] for hour in range(0, 24)}
+
+    # Group by hour (time of day) for each diff column and collect all error values
+    for col in diff_columns:
+        df_filtered = df[
+            df[col].abs() < 100
+        ]  # Filter rows where column values are greater than -999
+        for hour in range(0, 24):
+            # Collect error values for the current hour
+            hour_values = df_filtered[df_filtered.valid_time.dt.hour == hour][
+                col
+            ].values
+            hourly_data[hour].extend(hour_values)
+
+    # Convert hourly data to a list for plotting
+    data_for_plot = [hourly_data[hour] for hour in range(0, 24)]
+
+    # Plotting
+    fig, ax = plt.subplots(figsize=(30, 17))
+
+    # Create a boxplot
+    ax.boxplot(data_for_plot, patch_artist=True, showfliers=True)
+
+    # Set x-ticks and labels for hours
+    hour_labels = [f"{hour:02d}:00" for hour in range(0, 24)]
+    ax.set_xticks(range(1, 25))  # Boxplot indices start at 1
+    ax.set_xticklabels(hour_labels, rotation=45)
+
+    # Add labels and title
+    ax.set_xlabel("Local Time of Day (Hour)", fontsize=28)
+    ax.set_ylabel("NWP Error", fontsize=28)
+    ax.set_title(
+        "Box-and-Whisker Plot of NWP Error Grouped by Time of Day", fontsize=32
+    )
+    # Customize tick mark font size
+    plt.xticks(fontsize=28)
+    plt.yticks(fontsize=28)
+
+    # Show plot
+    plt.show()
+    # plt.savefig(
+    #     f"/home/aevans/nwp_bias/src/machine_learning/data/error_visuals/{clim_div}/_{metvar}_time_of_day_error_boxplot_radio.png"
+    # )
+
+
+def groupby_time_std(df, station, clim_div, metvar):
+    # Filter columns that contain 'target' in their name
+    diff_columns = [col for col in df.columns if "diff" in col]
+
+    # Create an empty list to store the aggregated results
+    aggregated_results = []
+    valid_hours = []  # To keep track of hours that have data
+
+    # Group by hour (time of day) for each diff column and calculate the standard deviation
+    for hour in range(0, 24):  # 0 to 23 for each hour of the day
+        hourly_data = []
+
+        # Collect data for all 'diff' columns for this hour
+        for col in diff_columns:
+            df_filtered = df[
+                df[col].abs() < 100
+            ]  # Filter rows where column values are greater than -999
+            # Group by hour and calculate the standard deviation for this hour
+            hourly_std = df_filtered[df_filtered.valid_time.dt.hour == hour][col].std()
+            if not np.isnan(hourly_std):
+                hourly_data.append(hourly_std)
+
+        # If there is any data for the hour, aggregate it (e.g., take the mean of the standard deviations for that hour)
+        if hourly_data:
+            aggregated_results.append(
+                np.mean(hourly_data)
+            )  # Aggregate the data (mean of hourly standard deviations)
+            valid_hours.append(hour)  # Track the hour that has valid data
+
+    # ---- Create DataFrame of results ----
+    hour_labels = [f"{h:02d}:00" for h in valid_hours]
+    results_df = pd.DataFrame(
+        {"Hour": hour_labels, "Mean_Absolute_Error": aggregated_results}
+    )
+
+    # Ensure output directory exists
+    out_dir = f"/home/aevans/nwp_bias/src/machine_learning/data/error_visuals/dataframes/{clim_div}"
+    os.makedirs(out_dir, exist_ok=True)
+
+    # Save DataFrame to CSV
+    csv_path = os.path.join(
+        out_dir, f"{station}_{metvar}_hourly_std_error_persistence.csv"
+    )
+    results_df.to_csv(csv_path, index=False)
+
+    # Plotting
+    fig, ax = plt.subplots(figsize=(30, 17))
+    x = np.arange(0, len(aggregated_results))
+
+    # Define a colormap
+    cmap = plt.get_cmap("Reds")
+
+    # Normalize data to apply the colormap
+    norm = plt.Normalize(min(aggregated_results) - 0.1, max(aggregated_results))
+    colors = cmap(norm(aggregated_results))
+
+    # Create a bar chart with color mapping
+    ax.bar(x, aggregated_results, color=colors)
+
+    # Set x-ticks and labels for valid hours
+    ax.set_xticks(x)
+    hour_labels = [
+        f"{hour:02d}:00" for hour in valid_hours
+    ]  # Labels for valid hours only
+    ax.set_xticklabels(hour_labels, rotation=45)
+
+    # Add labels and title
+    ax.set_xlabel("Local Time of Day (Hour)", fontsize=28)
+    ax.set_ylabel("Standard Deviation of NWP Error", fontsize=28)
+    ax.set_title(
+        f"NYSM: {clim_div} Standard Deviation of HRRR Error\n Grouped by Time of Day",
+        fontsize=32,
+    )
+
+    # Customize tick mark font size
+    plt.xticks(fontsize=28)
+    plt.yticks(fontsize=28)
+
+    # Show plot
+    plt.show()
+    # plt.savefig(
+    #     f"/home/aevans/nwp_bias/src/machine_learning/data/error_visuals/{clim_div}/_{metvar}_time_of_day_std_error_colored_radio.png"
+    # )
+
+    return aggregated_results
+
+
+def date_filter(ldf, time1, time2):
+    ldf = ldf[ldf["valid_time"] > time1]
+    ldf = ldf[ldf["valid_time"] < time2]
+    return ldf
+
+
+def create_scatterplot(x_column, y_column, fh, metvar, station, clim_div):
+    if metvar == "tp":
+        filtered_data = [
+            (x, y)
+            for x, y in zip(x_column, y_column)
+            if abs(x) > 0.15 and abs(y) > 0.15
+        ]
+        if filtered_data:
+            x_column, y_column = zip(*filtered_data)
+        # Convert to arrays regardless
+        x_column = np.array(x_column)
+        y_column = np.array(y_column)
+
+    xy = np.vstack([x_column, y_column])
+    z = gaussian_kde(xy)(xy)
+
+    plt.figure(figsize=(16, 12))
+    scatter = plt.scatter(
+        x_column,
+        y_column,
+        c=z,
+        norm=LogNorm(vmin=z.min(), vmax=z.max()),
+        cmap="viridis",
+        s=100,
+        alpha=0.5,
+    )
+
+    # Add color bar with label
+    cbar = plt.colorbar(scatter)
+    cbar.set_label("Point Density")
+
+    # Set labels and title
+    plt.xlabel("Target", fontsize=24)
+    if metvar == "tp":
+        plt.xlim(-30, 50)
+        plt.ylim(-30, 50)
+    else:
+        plt.xlim(-10, 15)
+        plt.ylim(-10, 15)
+    plt.ylabel("LSTM", fontsize=24)
+    if metvar == "tp":
+        plt.title(f"{station} Precipitation Error v LSTM Predictions", fontsize=32)
+    if metvar == "t2m":
+        plt.title(f"{station} Temperature Error v LSTM Predictions", fontsize=32)
+    if metvar == "u_total":
+        plt.title(f"{station} Wind Error v LSTM Predictions", fontsize=32)
+    # Customize tick mark font size
+    plt.xticks(fontsize=20)
+    plt.yticks(fontsize=20)
+    plt.grid(True, linestyle="--", alpha=0.6)
+
+    # Show the plot
+    plt.show()
+    # plt.savefig(
+    #     f"/home/aevans/nwp_bias/src/machine_learning/data/error_visuals/{clim_div}/{station}/{station}_{metvar}_scatter_{fh}_radio.png"
+    # )
+
+
+def met_output(df, full_df, fold, station, test_set_start, test_set_finish, fh, metvar):
+    fig, ax = plt.subplots(figsize=(24, 6))
+    x = df["valid_time"]
+
+    # Convert datetime values to numerical values
+    x_numeric = mdates.date2num(x)
+
+    # Assuming your timestamps are in a datetime64 format
+    day_mask = (x.dt.hour >= 6) & (
+        x.dt.hour < 18
+    )  # Adjust the hours based on your day/night definition
+
+    plt.plot(
+        np.array(x),
+        np.array(df["target_error_lead_0"]),
+        c="black",
+        linewidth=1,
+        label="Target",
+    )
+
+    plt.plot(
+        np.array(x),
+        np.array(df["Model forecast"]),
+        c="red",
+        linewidth=3,
+        alpha=0.7,
+        label="LSTM Output",
+    )
+
+    # Fill daytime hours with white color
+    ax.fill_between(
+        x_numeric, -4, 4.1, where=day_mask, color="white", alpha=0.5, label="Daytime"
+    )
+
+    # Fill nighttime hours with grey color
+    ax.fill_between(
+        x_numeric, -4, 4.1, where=~day_mask, color="grey", alpha=0.2, label="Nighttime"
+    )
+
+    ax.set_title(f"{metvar} Error LSTM Output v Target: {station}: FH{fh}", fontsize=28)
+    # plt.ylim(-5, 5.)
+    ax.legend()
+    plt.show()
+
+
+def plot_fh_drift(mae_ls, sq_ls, r2_ls, fh, station, clim_div, nwp_model, metvar):
+    """
+    Plots three lists (mae_ls, sq_ls, and r2_ls) as a function of forecast hour (fh).
+    Each series will have a scatter-line plot with unique markers and colors,
+    and the points will be annotated.
+
+    Parameters:
+        mae_ls (list): Mean absolute error values.
+        sq_ls (list): Squared error values.
+        r2_ls (list): R² values.
+        fh (list): Forecast hours.
+    """
+    plt.figure(figsize=(15, 9))
+
+    # Plot mae_ls
+    plt.plot(fh, mae_ls, label="MAE", marker="o", linestyle="-", color="blue")
+    plt.scatter(fh, mae_ls, marker="o", s=150, color="blue")
+    # Annotate mae_ls points
+    for i, txt in enumerate(mae_ls):
+        plt.annotate(
+            f"{txt:.2f}",
+            (fh[i], mae_ls[i]),
+            textcoords="offset points",
+            xytext=(0, 12),
+            ha="center",
+            fontsize=10,
+            color="blue",
+        )
+
+    # Plot sq_ls
+    plt.plot(fh, sq_ls, label="MSE", marker="x", linestyle="-", color="green")
+    plt.scatter(fh, sq_ls, marker="x", s=150, color="green")
+    # Annotate sq_ls points
+    for i, txt in enumerate(sq_ls):
+        plt.annotate(
+            f"{txt:.2f}",
+            (fh[i], sq_ls[i]),
+            textcoords="offset points",
+            xytext=(0, 12),
+            ha="center",
+            fontsize=10,
+            color="green",
+        )
+
+    # Plot r2_ls
+    plt.plot(fh, r2_ls, label="R²", marker="s", linestyle="-", color="red")
+    plt.scatter(fh, r2_ls, marker="s", s=150, color="red")
+    # Annotate r2_ls points
+    for i, txt in enumerate(r2_ls):
+        plt.annotate(
+            f"{txt:.2f}",
+            (fh[i], r2_ls[i]),
+            textcoords="offset points",
+            xytext=(0, -15),
+            ha="center",
+            fontsize=10,
+            color="red",
+        )
+
+    # Add labels, legend, and title
+    plt.xlabel("Forecast Hour (FH)", fontsize=20)
+    plt.ylabel("Error and R² Values", fontsize=20)
+    if metvar == "tp":
+        title_var = "Precipitation"
+    if metvar == "t2m":
+        title_var = "Temperature"
+    if metvar == "u_total":
+        title_var = "Wind"
+    plt.title(
+        f"Error Metrics as a Function of Forecast Hour \n {nwp_model}, {title_var}-Error",
+        fontsize=24,
+    )
+    plt.legend(fontsize=18)
+    plt.grid(True, linestyle="--", alpha=0.6)
+
+    # Ensure x-ticks are integers
+    plt.xticks(ticks=range(int(min(fh)), int(max(fh)) + 1), fontsize=20)
+    plt.yticks(fontsize=20)
+
+    plt.tight_layout()
+
+    # Show plot
+    plt.show()
+    # plt.savefig(
+    #     f"/home/aevans/nwp_bias/src/machine_learning/data/error_visuals/{clim_div}/{station}/{station}_{metvar}_fh_drift_radio.png"
+    # )
+
+
+from sklearn.metrics import r2_score
+
+
+def calculate_r2(df):
+    r2_ls = []
+
+    # Get all model forecast columns
+    forecast_cols = sorted(
+        [col for col in df.columns if col.startswith("Model forecast_fitted")],
+        key=lambda x: (len(x), x),
+    )
+
+    for fc in forecast_cols:
+        # Infer the suffix to find the matching target column
+        suffix = fc.replace("Model forecast_fitted", "")
+        target_col = f"target_error{suffix}"
+
+        if target_col in df.columns:
+            lstms = []
+            targets = []
+
+            for x, d in zip(df[fc].values, df[target_col].values):
+                if abs(d) < 100 and abs(x) < 100:
+                    lstms.append(d)
+                    targets.append(x)
+            if lstms and targets:
+                r2 = r2_score(targets, lstms)
+                r2_ls.append(max(0, r2))  # Ensure R² is not negative
+            else:
+                r2_ls.append(0)  # Fallback if no valid data
+        else:
+            print(f"Missing expected column: {target_col}")
+            r2_ls.append(0)
+
+    return r2_ls
