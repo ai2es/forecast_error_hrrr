@@ -1,14 +1,45 @@
-# -*- coding: utf-8 -*-
+"""Resample raw 5-minute NYSM observations into hourly / 3-hourly parquets.
+
+The raw NYSM netCDFs (5-minute observations) live under
+`/home/aevans/nysm/archive/nysm/netcdf/proc/{year}/{month}/`.  This
+module:
+
+1. Reads two months of raw 5-minute data (the requested month and
+   the one before it).
+2. Computes derived columns (`td` dew point, `mslp` mean-sea-level
+   pressure) using `metpy`.
+3. Resamples each variable to the requested frequency:
+   - `precip_total` : per-station 5-min diff -> sum over interval
+   - `wspd_sonic`   : mean over interval (saved as `wspd_sonic_mean`)
+   - everything else: top-of-the-hour samples
+4. Appends the new rows to the existing per-year parquet at
+   `/home/aevans/nwp_bias/data/nysm/nysm_{1H,3H}_obs_{year}.parquet`.
+
+Run via the CLI:
+
+    python get_resampled_nysm_data.py --year 2025 --month 4
+"""
+
+import argparse
+import glob
+
+import metpy.calc as mpcalc
+import numpy as np
 import pandas as pd
 import xarray as xr
-import glob
-import numpy as np
-import metpy.calc as mpcalc
 from metpy.units import units
-import argparse
 
 
 def get_raw_nysm_data(year, start_month):
+    """Load the raw 5-minute NYSM netCDFs for the previous + current month.
+
+    Returns
+    -------
+    df_nysm : pandas.DataFrame
+        Long-format observations indexed by `(station, time_5M)`.
+    nysm_sites : numpy.ndarray
+        Unique station ids present in the dataframe.
+    """
     # first, find the available months in the year directory
     nysm_path = f"/home/aevans/nysm/archive/nysm/netcdf/proc/{year}/"
     file_dirs = glob.glob(f"{nysm_path}/*")
@@ -40,10 +71,16 @@ def get_raw_nysm_data(year, start_month):
 
 
 def get_resampled_data(df, interval, method):
-    """
-    df: main dataframe [pandas dataframe]
-    interval: the frequency at which the data should be resampled
-    method: min, max, mean, etc. [str]
+    """Resample `df` per station at `interval` using aggregation `method`.
+
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        Indexed by `(station, time_5M)`.
+    interval : str
+        Pandas offset alias (e.g. `"1H"`, `"3H"`).
+    method : str
+        Aggregation name (`"mean"`, `"sum"`, `"max"`, ...).
     """
     return (
         df.reset_index()
@@ -56,6 +93,11 @@ def get_resampled_data(df, interval, method):
 
 
 def get_valid_time_data(df, hours_list, interval):
+    """Pick the rows whose `time_5M` is on the top of the hour.
+
+    `hours_list` controls which hours are kept (e.g. all 24 for 1H,
+    every 3rd for 3H).
+    """
     df = df.reset_index()
     # extract hourly observations at top of the hour in provided list
     df_return = df[
@@ -67,10 +109,13 @@ def get_valid_time_data(df, hours_list, interval):
 
 
 def get_resampled_precip_data(df, interval, method):
-    """
-    df: main dataframe [pandas dataframe]
-    interval: the frequency at which the data should be resampled
-    method: min, max, mean, etc. [str]
+    """Resample 5-minute cumulative precipitation into per-interval totals.
+
+    The raw `precip_total` column is monotonically increasing within
+    each station; we take the per-station first-difference, then
+    aggregate the per-step deltas into an interval sum.  Unrealistic
+    spikes (>500 mm / 5 min) are dropped, and small negatives
+    (e.g. gauge resets) are clipped to zero.
     """
     precip_diff = df.groupby("station").diff().reset_index()
     # remove unrealistic precipitation values (e.g., > 500 mm / 5 min)
@@ -88,10 +133,10 @@ def get_resampled_precip_data(df, interval, method):
 
 
 def get_resampled_wind_data(df, interval, method):
-    """
-    df: main dataframe [pandas dataframe]
-    interval: the frequency at which the data should be resampled
-    method: min, max, mean, etc. [str]
+    """Resample 5-minute sonic wind speed into per-interval aggregates.
+
+    Returns a dataframe with column ``wspd_sonic_{method}`` indexed by
+    ``(station, time_{interval})``.
     """
     df = df.reset_index()
     wind_resampled = (
@@ -106,6 +151,14 @@ def get_resampled_wind_data(df, interval, method):
 
 
 def get_nysm_dataframe_for_resampled(df_nysm, freq):
+    """Resample every NYSM variable to `freq` and concat into one frame.
+
+    Parameters
+    ----------
+    df_nysm : pandas.DataFrame
+        Raw 5-minute observations.
+    freq : {"1H", "3H"}
+    """
     nysm_vars = [
         "lat",
         "lon",
@@ -153,10 +206,21 @@ def get_nysm_dataframe_for_resampled(df_nysm, freq):
 
 
 def main(year, start_month):
-    # inputs
+    """Append two months of resampled NYSM data to the per-year parquets.
+
+    The output parquets at
+    ``/home/aevans/nwp_bias/data/nysm/nysm_{1H,3H}_obs_{year}.parquet``
+    are read, the freshly resampled rows are appended, and the result
+    is written back in place.
+
+    Parameters
+    ----------
+    year : int
+    start_month : int
+        Month being refreshed (this and `start_month - 1` are read).
+    """
     save_path = "/home/aevans/nwp_bias/data/nysm/"
 
-    # get the raw nysm data
     print("--- get_raw_nysm_data ---")
     df_nysm, nysm_sites = get_raw_nysm_data(year, start_month)
 

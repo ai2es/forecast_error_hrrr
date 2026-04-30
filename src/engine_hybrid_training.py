@@ -1,28 +1,20 @@
-"""LSTM seq2seq training driver.
+"""Hybrid (LSTM encoder + ViT encoder + LSTM decoder) training driver.
 
-For each climate division on the CLI, for each NYSM station in that
-division, for each supported variable (`t2m`, `u_total`, `tp`), and
-for each HRRR forecast hour 1..18 (visited in random order):
-
-1. Build the training dataframe with `prepare_lstm_data.prepare_lstm_data`.
-2. Wrap it in `SequenceDatasetMultiTask` (per-window z-score, NYSM
-   persistence on the future portion of the encoder input).
-3. Train `encode_decode_lstm.ShallowLSTM_seq2seq_multi_task` with the
-   `OutlierFocusedLoss` and the `ReduceLROnPlateau` scheduler.
-4. Persist the encoder + decoder weights for the
-   `(climdiv, metvar, station)` combination to `MODEL_DIR`.
-
-CLI
----
-    python engine_lstm_training.py --clim_div "Hudson Valley" --device_id 0
-    python engine_lstm_training.py --clim_div "Eastern Plateau" "Western Plateau" --device_id 1
+Mirrors `engine_lstm_training.py` but builds the
+`hybrid_vit_lstm.LSTM_Encoder_Decoder_with_ViT` model and uses the
+hybrid sequencer (which additionally yields radiometer image tensors
+`P` per item).  Saves three weight files per (station, metvar, fh):
+encoder, decoder, ViT.
 """
+
+import sys
+
+sys.path.append("..")
 
 import argparse
 import gc
 import os
 import random
-import sys
 from datetime import datetime
 
 import numpy as np
@@ -30,26 +22,36 @@ import pandas as pd
 import torch
 import torch.nn as nn
 
-sys.path.append("..")
-
-from model_architecture import encode_decode_lstm, sequencer
-from model_data import hrrr_data, nysm_data, prepare_lstm_data
+from model_architecture import hybrid_vit_lstm, sequencer
+from model_data import hrrr_data, nysm_data, prepare_hybrid_data
 
 
 print("imports loaded")
 
 
-# Override these via environment variables if your filesystem layout
-# differs from the defaults.
 MODEL_DIR = os.environ.get(
-    "LSTM_MODEL_DIR",
-    "/home/aevans/inference_ai2es_forecast_err/MODELS",
+    "HYBRID_MODEL_DIR",
+    "/home/aevans/inference_ai2es_forecast_err/MODELS/HYBRID",
+)
+
+
+# Hybrid hyper-parameters (matched to the original FSDP setup).
+HYBRID_DEFAULTS = dict(
+    past_timesteps=1,
+    future_timesteps=1,
+    pos_embedding=0.5,
+    time_embedding=0.5,
+    vit_num_layers=3,
+    num_heads=11,
+    hidden_dim=7260,
+    mlp_dim=1032,
+    output_dim=1,
+    dropout=1e-15,
+    attention_dropout=1e-12,
 )
 
 
 def custom_collate(batch):
-    """Drop `None` items the dataset may emit (e.g. all-zero precip
-    sequences) before delegating to the default collate."""
     batch = [item for item in batch if item is not None]
     if not batch:
         return None
@@ -57,20 +59,12 @@ def custom_collate(batch):
 
 
 def date_filter(ldf, time1, time2):
-    """Strict date-window filter (`time1 < valid_time < time2`)."""
     ldf = ldf[ldf["valid_time"] > time1]
     ldf = ldf[ldf["valid_time"] < time2]
     return ldf
 
 
 class EarlyStopper:
-    """Plain-vanilla patience-based early stopping.
-
-    Keeps track of the best loss seen so far; once `patience`
-    consecutive epochs have failed to improve on it (by more than
-    `min_delta`), `early_stop` returns True.
-    """
-
     def __init__(self, patience, min_delta=0):
         self.patience = patience
         self.min_delta = min_delta
@@ -89,15 +83,6 @@ class EarlyStopper:
 
 
 class OutlierFocusedLoss(nn.Module):
-    """MAE loss that up-weights high-magnitude errors.
-
-    `loss = mean( (|err| + 1)^alpha * |err| )`
-
-    `alpha = 0` reduces to plain MAE; larger `alpha` makes the loss
-    increasingly sensitive to outliers, which is useful when the
-    target distribution is heavy-tailed (like NWP forecast error).
-    """
-
     def __init__(self, alpha, device):
         super().__init__()
         self.alpha = alpha
@@ -112,18 +97,11 @@ class OutlierFocusedLoss(nn.Module):
         return (weights * base_loss).mean()
 
 
-def get_model_file_size(file_path):
-    """Print the on-disk size of a saved checkpoint in MB."""
-    size_bytes = os.path.getsize(file_path)
-    size_mb = size_bytes / (1024 * 1024)
-    print(f"Model file size: {size_mb:.2f} MB")
-
-
-def save_model_weights(model, encoder_path, decoder_path):
-    """Persist encoder + decoder state dicts to disk."""
+def _save_weights(model, encoder_path, decoder_path, vit_path):
     os.makedirs(os.path.dirname(encoder_path), exist_ok=True)
     torch.save(model.encoder.state_dict(), encoder_path)
     torch.save(model.decoder.state_dict(), decoder_path)
+    torch.save(model.ViT.state_dict(), vit_path)
 
 
 def main(
@@ -139,88 +117,64 @@ def main(
     hrrr_df,
     nwp_model="HRRR",
     sequence_length=30,
-    target="target_error",
     learning_rate=5e-5,
     save_model=True,
+    hybrid_kwargs=None,
 ):
-    """Train one model per `(station, metvar)` in the given climate
-    division for forecast hour `fh`.
-
-    Parameters
-    ----------
-    start_time, end_time : datetime
-        Inclusive start / exclusive end of the training window.
-    batch_size, num_layers, epochs, weight_decay, learning_rate : numeric
-        Standard hyper-parameters.
-    fh : int
-        Forecast hour (1..18) being trained.
-    clim_div : str or list[str]
-        Climate division name(s) (will be space-joined if a list).
-    device : torch.device
-        Compute device.
-    hrrr_df : pandas.DataFrame
-        Pre-loaded HRRR forecasts for `fh`.
-    nwp_model : str
-        Identifier of the NWP model the data is sourced from.
-    sequence_length : int
-        Length of the past window fed to the encoder.
-    target : str
-        Name of the column predicted by the model.
-    learning_rate : float
-        AdamW learning rate.
-    save_model : bool
-        If True, persist final weights even if the best-on-train check
-        never triggered (defensive).
-    """
     print("CUDA available?", torch.cuda.is_available())
-    print("GPU count:", torch.cuda.device_count())
-    print("Device:", device)
+    print("Number of gpus: ", torch.cuda.device_count())
+    print(device)
     device_id = 0
     torch.cuda.set_device(device_id)
     device = torch.device(f"cuda:{device_id}")
     torch.manual_seed(101)
-    print("::: LSTM Training :::")
+    print(" *********")
+    print("::: Hybrid Training :::")
 
-    # Use the start_time's year to choose which year of NYSM data to load.
+    hybrid_kwargs = {**HYBRID_DEFAULTS, **(hybrid_kwargs or {})}
+
     year = start_time.year
     if isinstance(clim_div, list):
         clim_div = " ".join(clim_div)
-    print("Climate division:", clim_div)
+    print(clim_div)
 
     nysm_df = nysm_data.load_nysm_data(year)
     clim_df = pd.read_csv("/home/aevans/nwp_bias/src/landtype/data/nysm.csv")
     clim_df_filt = clim_df[clim_df["climate_division_name"] == clim_div]
 
     stations_in_div = clim_df_filt["stid"].unique().tolist()
-    print("Stations in division:", stations_in_div)
-
+    print(stations_in_div)
     for stid in stations_in_div:
-        print("Station:", stid)
+        print(stid)
         filtered_df = date_filter(nysm_df, start_time, end_time)
         hrrr_df_filt = date_filter(hrrr_df, start_time, end_time)
 
         for metvar in ["t2m", "u_total", "tp"]:
-            decoder_path = (
-                f"{MODEL_DIR}/{clim_div}_{metvar}_{stid}_decoder.pth"
-            )
             encoder_path = (
-                f"{MODEL_DIR}/{clim_div}_{metvar}_{stid}_encoder.pth"
+                f"{MODEL_DIR}/{clim_div}_{metvar}_{stid}_fh{fh}_encoder.pth"
+            )
+            decoder_path = (
+                f"{MODEL_DIR}/{clim_div}_{metvar}_{stid}_fh{fh}_decoder.pth"
+            )
+            vit_path = (
+                f"{MODEL_DIR}/{clim_div}_{metvar}_{stid}_fh{fh}_vit.pth"
             )
 
-            # Build the training dataframe for this station / metvar.
             (
                 lstm_df,
                 features,
                 stations,
                 target,
                 valid_times,
-            ) = prepare_lstm_data.prepare_lstm_data(
+                image_list_cols,
+            ) = prepare_hybrid_data.prepare_hybrid_data(
                 filtered_df, hrrr_df_filt, stid, metvar, fh=fh, train=True
             )
-            print(f"Features: {len(features)}")
-            print(f"Target: {target}")
+            print("FEATURES", len(features))
+            print("IMAGES", image_list_cols)
+            print("TARGET", target)
 
-            train_dataset = sequencer.SequenceDatasetMultiTask(
+            train_dataset = sequencer.SequenceDatasetMultiTaskHybrid(
                 dataframe=lstm_df,
                 target=target,
                 features=features,
@@ -228,6 +182,8 @@ def main(
                 forecast_steps=fh,
                 device=device,
                 metvar=metvar,
+                nwp_model=nwp_model,
+                image_list_cols=image_list_cols,
             )
 
             train_kwargs = {
@@ -237,37 +193,30 @@ def main(
                 "collate_fn": custom_collate,
             }
             train_loader = torch.utils.data.DataLoader(train_dataset, **train_kwargs)
-            print("Data loader ready.")
+            print("!! Data Loaders Successful !!")
 
             num_sensors = int(len(features))
             hidden_units = int(12 * len(features))
 
-            # Single shared encoder + decoder; the multi-task name is
-            # historical (the original architecture supported per-station
-            # decoder heads).
-            model = encode_decode_lstm.ShallowLSTM_seq2seq_multi_task(
+            model = hybrid_vit_lstm.LSTM_Encoder_Decoder_with_ViT(
                 num_sensors=num_sensors,
                 hidden_units=hidden_units,
                 num_layers=num_layers,
                 mlp_units=1500,
                 device=device,
-                num_stations=len(stations),
+                num_stations=len(image_list_cols),
+                **hybrid_kwargs,
             ).to(device)
 
-            # Warm-start from previous weights if they exist.
             if os.path.exists(encoder_path):
-                print("Loading existing encoder weights")
-                model.encoder.load_state_dict(
-                    torch.load(encoder_path), strict=False
-                )
-                get_model_file_size(encoder_path)
-
+                print("Loading Encoder Model")
+                model.encoder.load_state_dict(torch.load(encoder_path), strict=False)
             if os.path.exists(decoder_path):
-                print("Loading existing decoder weights")
-                model.decoder.load_state_dict(
-                    torch.load(decoder_path), strict=False
-                )
-                get_model_file_size(decoder_path)
+                print("Loading Decoder Model")
+                model.decoder.load_state_dict(torch.load(decoder_path), strict=False)
+            if os.path.exists(vit_path):
+                print("Loading ViT Model")
+                model.ViT.load_state_dict(torch.load(vit_path), strict=False)
 
             optimizer = torch.optim.AdamW(
                 model.parameters(), lr=learning_rate, weight_decay=weight_decay
@@ -277,8 +226,9 @@ def main(
                 optimizer, factor=0.1, patience=4
             )
 
-            print("--- Training LSTM ---")
             early_stopper = EarlyStopper(10)
+            print("--- Training Hybrid ---")
+
             train_loss_ls = []
             for ix_epoch in range(1, epochs + 1):
                 gc.collect()
@@ -295,17 +245,13 @@ def main(
                 if early_stopper.early_stop(train_loss):
                     print(f"Early stopping at epoch {ix_epoch}")
                     break
-                # Save whenever the running min improves (after a brief
-                # warmup so we don't checkpoint random first epochs).
                 if train_loss <= min(train_loss_ls) and ix_epoch > 5:
-                    print(f"Saving model weights at epoch {ix_epoch}")
-                    save_model_weights(model, encoder_path, decoder_path)
+                    print(f"Saving Hybrid weights... EPOCH {ix_epoch}")
+                    _save_weights(model, encoder_path, decoder_path, vit_path)
                     save_model = False
 
-            # Defensive final save in case the running-min check never
-            # fired (e.g. epochs <= 5 or non-decreasing loss curve).
             if save_model:
-                save_model_weights(model, encoder_path, decoder_path)
+                _save_weights(model, encoder_path, decoder_path, vit_path)
 
             print("... completed ...")
             gc.collect()
@@ -315,13 +261,13 @@ def main(
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--clim_div", nargs="+", required=True, help="Climate division name(s)"
+        "--clim_div", nargs="+", required=True, help="List of climate divisions"
     )
     parser.add_argument(
         "--device_id",
         type=int,
         required=True,
-        help="GPU device id (e.g. 0 for cuda:0)",
+        help="Device to use (e.g., 0 for cuda:0)",
     )
     args = parser.parse_args()
     device = torch.device(
@@ -331,13 +277,9 @@ if __name__ == "__main__":
     now = datetime.now()
     year = now.year
 
-    # Training window.  Pick something appropriate to the years of HRRR
-    # parquets that exist on disk.
     start_time = datetime(2018, 10, 1, 0, 0, 0)
     end_time = datetime(2025, 5, 5, 23, 59, 0)
 
-    # Train each forecast hour in random order so that any short-circuit
-    # failure leaves a representative subset of `fh`s trained.
     fh_all = np.arange(1, 19)
     fh = fh_all.copy()
     while len(fh) > 0:
@@ -348,7 +290,7 @@ if __name__ == "__main__":
             main(
                 start_time=start_time,
                 end_time=end_time,
-                batch_size=1000,
+                batch_size=64,
                 num_layers=3,
                 epochs=50,
                 weight_decay=0.0,

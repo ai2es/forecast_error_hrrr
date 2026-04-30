@@ -1,27 +1,54 @@
-import xarray as xr
-import numpy as np
-import pandas as pd
-import datetime as dt
-from datetime import time, datetime
+"""Build per-hour radiometer "profiler images" used by the Hybrid model.
+
+Pipeline:
+
+1. `get_raw_profiler_data(year, root)`
+   Reads all available monthly radiometer netCDFs for a year, applies
+   unit conversions / QC, and returns one tidy long-format DataFrame.
+2. The main routine then walks each station / hour, pulls the
+   `(time, range)` slice, stacks the variables into a single 2-D
+   array, and writes it as
+   ``{out_root}/{year}/{stid}/{stid}_{year}_{MMDDHH}.npy``.
+
+Those `.npy` files are what
+`model_data.prepare_hybrid_data._image_path_for` looks up when
+attaching `image_path_{stid}` columns to the Hybrid training /
+inference dataframes.
+
+Run via:
+
+    python build_profiler_images.py --year 2025
+"""
+
+import argparse
+import gc
 import glob
 import os
-import gc
-import cupy as cp
+from datetime import datetime, time
+
 import cudf
-import argparse
+import cupy as cp
+import numpy as np
+import pandas as pd
+import xarray as xr
 
 
 def get_raw_profiler_data(year, radiometer_data_path):
-    """
-    Loads and preprocesses raw profiler data for a given year.
+    """Load and preprocess all monthly radiometer netCDFs for `year`.
 
-    Args:
-        year (int): The year of the data to process.
-        radiometer_data_path (str): Path to the directory containing radiometer data files.
+    Parameters
+    ----------
+    year : int
+    radiometer_data_path : str
+        Root directory containing per-year subdirectories with monthly
+        netCDF files.
 
-    Returns:
-        pd.DataFrame: A DataFrame containing the processed data for the year.
-        np.ndarray: An array of unique station sites in the data.
+    Returns
+    -------
+    df_nysm : pandas.DataFrame
+        Tidy long-format radiometer observations.
+    nysm_sites : numpy.ndarray
+        Unique station ids present in the data.
     """
     # Construct path to the specific year's directory
     radiometer_data_path = f"{radiometer_data_path}/{year}/"
@@ -84,7 +111,12 @@ def get_raw_profiler_data(year, radiometer_data_path):
 
 
 def get_raw_profiler_data_rapids(year, radiometer_data_path, start_month):
+    """GPU-accelerated counterpart to `get_raw_profiler_data`.
 
+    Reads the previous + current month's radiometer netCDFs, performs
+    unit conversions on GPU via cuDF, and returns a `(cudf.DataFrame,
+    np.ndarray of stations)` tuple.
+    """
     radiometer_data_path = f"{radiometer_data_path}/{year}/"
     file_dirs = sorted(glob.glob(f"{radiometer_data_path}/*"))
 
@@ -135,14 +167,22 @@ def get_raw_profiler_data_rapids(year, radiometer_data_path, start_month):
     return df, nysm_sites
 
 def make_images(df):
-    """
-    Converts data from a DataFrame into a 3D array (height x width x channels) suitable for image generation.
+    """Convert per-(time, range) observations into a 3D image stack.
 
-    Args:
-        df (pd.DataFrame): DataFrame containing the data to be converted into an image array.
+    Each non-`time`/`range` variable becomes a `(height, width)` slice
+    where `height = unique ranges` and `width = unique times`.  All
+    slices are stacked along the last axis to produce a
+    `(height, width, channels)` array.
 
-    Returns:
-        np.ndarray: A 3D array (height x width x channels).
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        Long-format radiometer slice for a single station/hour.
+
+    Returns
+    -------
+    numpy.ndarray
+        Image of shape `(height, width, channels)`.
     """
     skip_list = ["time", "range"]  # Skip these columns when converting
     stacked_list = []
@@ -167,13 +207,16 @@ def make_images(df):
 def make_images_rapids(df):
     """
     Converts a cuDF DataFrame into a 3D CuPy array 
-    (height x width x channels) using GPU acceleration.
+    GPU-accelerated counterpart to `make_images`.
 
-    Args:
-        df (cudf.DataFrame): GPU DataFrame
+    Parameters
+    ----------
+    df : cudf.DataFrame
 
-    Returns:
-        cupy.ndarray: 3D array (height, width, channels) on GPU
+    Returns
+    -------
+    cupy.ndarray
+        3D array `(height, width, channels)` on the GPU.
     """
 
     skip_list = ["time", "range"]
@@ -205,12 +248,19 @@ def make_images_rapids(df):
 
 
 def main(radiometer_data_path):
-    """
-    Main function to process raw profiler data for multiple years, filter it by station and time,
-    and save the results as numpy image files.
+    """Build the per-station, per-hour `.npy` image cache.
 
-    Args:
-        radiometer_data_path (str): Path to the directory containing the raw profiler data.
+    For every year in the loop, every station, every day, every hour:
+
+    1. Filter the radiometer dataframe to that hour's slice.
+    2. Pivot it into a `(height, width, channels)` numpy array via
+       `make_images`.
+    3. Save to ``{out}/{year}/{stid}/{stid}_{year}_{MMDDHH}.npy``.
+
+    Parameters
+    ----------
+    radiometer_data_path : str
+        Root directory containing per-year radiometer netCDFs.
     """
     save_path = "/home/aevans/nwp_bias/src/machine_learning/data/profiler_images"
 

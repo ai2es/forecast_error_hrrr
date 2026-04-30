@@ -1,39 +1,58 @@
+"""Cross-reference NWP forecasts against NYSM observations.
+
+For a given month/year/model/fh:
+
+1. `read_data_ny(...)`         - read all daily HRRR parquets stitched
+                                  by `forecast_hr_parquet_builder.py`.
+2. `load_nysm_data(...)`       - read the matching hourly NYSM parquet.
+3. `interpolate_model_data_to_nysm_locations_groupby(...)`
+                                - interpolate the gridded NWP fields
+                                  to each NYSM station's lat/lon using
+                                  scipy.griddata.
+4. `mask_out_water(...)`       - drop stations whose grid cell is over
+                                  water (the HRRR land-sea mask).
+5. `main(...)`                 - glue everything together and write the
+                                  cleaned per-station, per-station-aware
+                                  parquet that `prepare_lstm_data*` reads.
+
+Run via `clean_lstm_data.run_forecast_hour_tasks(...)` or directly
+from the CLI by invoking `main(month, year, model, fh)`.
+"""
+
+import argparse
+import datetime
+import gc
 import glob
 import multiprocessing as mp
 import os
+import pickle
+import time
 import warnings
+from datetime import timedelta
+from multiprocessing import Process
+
 import cfgrib
+import cudf
+import matplotlib.pyplot as plt
 import metpy.calc as mpcalc
 import numpy as np
 import pandas as pd
-import time
 from metpy.units import units
 from scipy import interpolate
+from sklearn import preprocessing, utils
 from sklearn.neighbors import BallTree
-from multiprocessing import Process
-import argparse
-
-from sklearn import preprocessing
-from sklearn import utils
-
-import matplotlib.pyplot as plt
-
-import datetime as datetime
-from datetime import timedelta
-import gc
-import time
-import pickle
-import cudf
 
 
 def load_nysm_data(year):
+    """Read the resampled hourly NYSM parquet for `year`."""
     nysm_path = "/home/aevans/nwp_bias/data/nysm/"
     nysm_1H_obs = cudf.read_parquet(f"{nysm_path}nysm_1H_obs_{year}.parquet")
     nysm_1H_obs = nysm_1H_obs.fillna(-999)
-    return nysm_1H_obs.to_pandas()  # ← convert back to pandas
+    return nysm_1H_obs.to_pandas()
 
 
 def read_data_ny(model, month, year, fh):
+    """Concatenate every daily NWP parquet for `(model, fh, year/month)`."""
     cleaned_data_path = f"/home/aevans/ai2es/lstm/{model.upper()}/fh_{fh}/"
     filelist = sorted(glob.glob(f"{cleaned_data_path}{year}/{month}/*.parquet"))
 
@@ -48,10 +67,11 @@ def read_data_ny(model, month, year, fh):
             continue
 
     df = cudf.concat(li)
-    return df.to_pandas()  # ← convert back to pandas
+    return df.to_pandas()
 
 
 def read_data_ny_v2(model, month, year, fh):
+    """Same as `read_data_ny` but uses pandas (CPU-only) read path."""
     cleaned_data_path = f"/home/aevans/ai2es/lstm/{model.upper()}/fh_{fh}/"
     filelist = sorted(glob.glob(f"{cleaned_data_path}{year}/{month}/*.parquet"))
 
@@ -73,6 +93,7 @@ def read_data_ny_v2(model, month, year, fh):
 
 
 def make_dirs(save_dir, fh):
+    """Create `save_dir` if it doesn't already exist."""
     if not os.path.exists(f"{save_dir}/"):
         os.makedirs(f"{save_dir}/")
 
@@ -125,6 +146,8 @@ def reformat_df(df):
 
 
 def interpolate_func_griddata(values, model_lon, model_lat, xnew, ynew):
+    """Linearly interpolate `values` at scattered `(model_lon, model_lat)`
+    points to the target grid `(xnew, ynew)`."""
     if np.mean(values) == np.nan:
         print("SOME VALS ARE NAN")
     vals = interpolate.griddata(
@@ -136,9 +159,10 @@ def interpolate_func_griddata(values, model_lon, model_lat, xnew, ynew):
 
 
 def datetime_convert(df, col):
+    """Convert nanosecond-int timestamps in `df[col]` to `datetime`."""
     new_vals = []
     for i, _ in enumerate(df[col]):
-        seconds = df[col].iloc[1] / 1e9  # Convert nanoseconds to seconds
+        seconds = df[col].iloc[1] / 1e9
         dt = datetime.datetime.utcfromtimestamp(seconds)
         new_vals.append(dt)
     df[col] = new_vals
@@ -225,12 +249,14 @@ def interpolate_model_data_to_nysm_locations_groupby(df_model, df_nysm, vars_to_
 
 
 def get_locations_for_ball_tree(df, nysm_1H_obs):
+    """Build a `BallTree` on the model grid points and query it with the
+    NYSM station locations.  Returns the indices of the closest grid
+    point to each station."""
     locations_a = df.reset_index()[["latitude", "longitude"]]
     locations_b = nysm_1H_obs[["lat", "lon"]].dropna().reset_index()
-    # ball tree to find nysm site locations
-    # locations_a ==> build the tree
-    # locations_b ==> query the tree
-    # Creates new columns converting coordinate degrees to radians.
+
+    # locations_a -> build the tree (model grid points)
+    # locations_b -> query the tree (NYSM site locations)
     for column in locations_a[["latitude", "longitude"]]:
         rad = np.deg2rad(locations_a[column].values)
         locations_a[f"{column}_rad"] = rad
@@ -243,9 +269,10 @@ def get_locations_for_ball_tree(df, nysm_1H_obs):
 
 
 def haversine(lon1, lat1, lon2, lat2):
+    """Great-circle distance between two `(lat, lon)` points in km."""
     import math
 
-    R = 6371000  # radius of Earth in meters
+    R = 6371000  # radius of Earth in metres
     phi_1 = math.radians(lat1)
     phi_2 = math.radians(lat2)
 
@@ -347,10 +374,16 @@ def redefine_precip_intervals(data, prev_fh, model):
 
 
 def mask_out_water(model, df_model):
+    """Drop NWP rows whose grid cell is over water.
+
+    The land/sea mask is loaded once from a fixed reference grib file
+    (the actual values don't change over time).  Rows whose grid cell
+    has a land-sea mask value of 0 (water) are removed.
+    """
     df_model = df_model.reset_index()
-    # read in respective data
-    # these files are hard coded since we only need land surface information that was not extracted from original files
-    # within the data cleaning script
+    # The mask file is hard-coded because we only need land-surface
+    # information which was not extracted from the original files in
+    # the data cleaning step.
     indir = f"/home/aevans/nwp_bias/data/model_data/{model.upper()}/2018/01/"
     if model.upper() == "GFS":
         filename = "gfs_4_20180101_0000_003.grb2"

@@ -1,32 +1,35 @@
-import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
+"""Plotting helpers for the bulk error analysis.
 
-# import seaborn as sns
+A grab-bag of plot generators (KDE density plots, calibration scatter,
+hour-of-day / month-of-year heatmaps, boxplots, etc.) used by
+`error_output_bulk_main.py`.  Most functions take a tidy long-format
+DataFrame and either save a PNG or return a `(fig, ax)` pair.
+"""
+
+import calendar
+import os
 import re
 import statistics as st
-
 from datetime import datetime
-from scipy.stats import gaussian_kde
+
 import matplotlib.dates as mdates
-import calendar
-from sklearn.metrics import r2_score
-import os
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
 from matplotlib.colors import LogNorm
+from scipy.stats import gaussian_kde
+from sklearn.metrics import r2_score
 
 
 def myround(x, base):
+    """Round `x` to the nearest multiple of `base`."""
     return base * round(x / base)
 
 
-# function to get unique values
 def unique(list1):
-    # initialize a null list
+    """Return the unique elements of `list1`, preserving input order."""
     unique_list = []
-
-    # traverse for all elements
     for x in list1:
-        # check if exists in unique_list or not
         if x not in unique_list:
             unique_list.append(x)
     return unique_list

@@ -1,3 +1,58 @@
+# --- Project artifacts -----------------------------------------------
 MODELS/
 FINAL_OUTPUT/
 builds/
+
+# --- Python bytecode / caches ----------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# --- Tooling caches --------------------------------------------------
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.pytype/
+.dmypy.json
+dmypy.json
+.cache/
+
+# --- Distribution / packaging ----------------------------------------
+build/
+dist/
+*.egg
+*.egg-info/
+pip-wheel-metadata/
+pip-log.txt
+pip-delete-this-directory.txt
+
+# --- Coverage / test artifacts ---------------------------------------
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+nosetests.xml
+coverage.xml
+*.cover
+*.py.cover
+
+# --- Notebooks / Jupyter ---------------------------------------------
+.ipynb_checkpoints/
+profile_default/
+ipython_config.py
+
+# --- Virtual environments --------------------------------------------
+.venv/
+venv/
+env/
+ENV/
+
+# --- Editor / OS clutter ---------------------------------------------
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.swp
+*.swo

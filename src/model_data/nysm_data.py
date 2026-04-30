@@ -1,49 +1,55 @@
-import pandas as pd
+"""Load NYSM observation parquets (pandas).
+
+The hourly NYSM observation parquets are produced upstream by
+`data_cleaning/get_resampled_nysm_data.py` and live in `nysm_path`.
+This module concatenates all years in `YEARS` into one DataFrame.
+
+For the GPU-accelerated inference path, see
+`model_data.nysm_data_rapids`.
+"""
+
 import numpy as np
+import pandas as pd
+
+
+# Years of NYSM hourly parquets to load.
+YEARS = np.arange(2023, 2026)
 
 
 def load_nysm_data(start_year):
+    """Read and concatenate hourly NYSM observation parquets.
+
+    Parameters
+    ----------
+    start_year : int
+        Currently informational; the actual years loaded are taken
+        from the module-level `YEARS` constant.  The argument is kept
+        for API parity with the cuDF variant.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Concatenated NYSM observations.  `snow_depth` and `ta9m`
+        missing values are sentinel-filled with `-999`; any other rows
+        with NaNs are dropped.  The `time_1H` column is renamed to
+        `valid_time` to match HRRR's convention.
     """
-    Load and concatenate NYSM (New York State Mesonet) data from parquet files.
-
-    NYSM data is resampled at 1-hour intervals and stored in separate parquet files
-    for each year from 2018 to 2024.
-
-    Returns:
-        nysm_1H_obs (pd.DataFrame): A DataFrame containing concatenated NYSM data with
-        missing values filled for the 'snow_depth' column.
-
-    This function reads NYSM data from parquet files, resamples it to a 1-hour interval,
-    and concatenates the data from multiple years. Missing values in the 'snow_depth'
-    column are filled with -999, and any rows with missing values are dropped before
-    returning the resulting DataFrame.
-
-    Example:
-    ```
-    nysm_data = load_nysm_data()
-    print(nysm_data.head())
-    ```
-
-    Note: Ensure that the parquet files are located in the specified path before using this function.
-    """
-    # Define the path where NYSM parquet files are stored.
     nysm_path = "/home/aevans/nwp_bias/data/nysm/"
 
-    # Initialize an empty list to store data for each year.
     nysm_1H = []
-
-    # for year in np.arange(int(start_year - 1), int(start_year + 1)):
-    for year in np.arange(2023, 2026):
+    for year in YEARS:
         df = pd.read_parquet(f"{nysm_path}nysm_1H_obs_{year}.parquet")
         df.reset_index(inplace=True)
         df = df.rename(columns={"time_1H": "valid_time"})
         nysm_1H.append(df)
 
-    # Concatenate data from different years into a single DataFrame.
     nysm_1H_obs = pd.concat(nysm_1H)
 
-    # Fill missing values in the 'snow_depth' column with -999.
+    # Sentinel-fill columns that legitimately can be missing
+    # (e.g. snow depth in summer, 9m temperature for older sites).
     nysm_1H_obs.fillna({"snow_depth": -999}, inplace=True)
     nysm_1H_obs.fillna({"ta9m": -999}, inplace=True)
+
+    # Drop rows with any other missing values.
     nysm_1H_obs.dropna(inplace=True)
     return nysm_1H_obs

@@ -1,9 +1,17 @@
-import pandas as pd
-import numpy as np
-import seaborn as sns
-import matplotlib.pyplot as plt
+"""Time-of-year error heatmap (HRRR vs persistence vs LSTM).
+
+Same layout as `time_of_day_errors.plot_combined_heatmap` but binned
+by month-of-year instead of hour-of-day.  Reads per-climate-division
+CSVs at `{base_path}/{division}/<file>.csv` containing `Month` and
+`Mean_Absolute_Error` columns.
+"""
+
 import os
-from matplotlib.colors import ListedColormap
+
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+import seaborn as sns
 
 
 def plot_combined_heatmap_month(
@@ -14,10 +22,20 @@ def plot_combined_heatmap_month(
     pers_file="ALL_tp_monthly_error_abs_persistence.csv",
     lstm_file="ALL_tp_monthly_error_abs.csv",
 ):
+    """Render the combined month-of-year error heatmap.
 
-    # -------------------------------------------------------------
-    # FUNCTION TO LOAD EACH MODEL'S CSV AND PIVOT TO DIV x MONTH
-    # -------------------------------------------------------------
+    Parameters
+    ----------
+    clim_div : list[str]
+        Climate-division names (one row per division in the bottom block).
+    base_path : str
+        Directory containing per-division subdirectories with the CSVs.
+    title : str
+        Plot title.
+    hrrr_file, pers_file, lstm_file : str
+        Filenames within each `{base_path}/{division}/`.
+    """
+    # Load each model's per-division CSV and pivot to (division x month).
     def load_and_pivot(file):
         all_data = []
         for div in clim_div:

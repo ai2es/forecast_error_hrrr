@@ -1,9 +1,30 @@
-import pandas as pd
-import numpy as np
-import seaborn as sns
-import matplotlib.pyplot as plt
+"""Time-of-day error heatmap (HRRR vs persistence vs LSTM).
+
+Renders a multi-row heatmap comparing three error sources binned by
+local hour of day:
+
+    Row 0 : HRRR raw forecast error               (Greys colormap)
+    Row 1 : LSTM error coloured by improvement    (RdBu, centered)
+    Row 2 : LSTM % improvement over persistence   (RdBu, centered)
+    Row 3+: Per-climate-division LSTM error       (Purples)
+    Last  : All-stations weighted-mean LSTM error (Purples)
+
+Each row group uses a different colormap, achieved by stacking
+masked seaborn heatmaps on top of each other.
+
+This script expects per-climate-division CSVs at
+`{base_path}/{division}/<file>.csv` containing `Hour` and
+`Mean_Absolute_Error` columns.  The CSVs are produced upstream from
+the inference output parquets.
+"""
+
 import os
-from matplotlib.colors import ListedColormap
+
+import matplotlib.colors as mcolors
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+import seaborn as sns
 
 
 def plot_combined_heatmap(
@@ -14,6 +35,22 @@ def plot_combined_heatmap(
     lstm_file="ALL_u_total_hourly_error.csv",
     title="Combined Error Heatmap",
 ):
+    """Render the combined hour-of-day error heatmap.
+
+    Parameters
+    ----------
+    clim_div : list[str]
+        Climate-division names; one row per division (in order) is
+        drawn in the bottom block.
+    base_path : str
+        Directory whose subdirectories are named after the climate
+        divisions and contain the per-division error CSVs.
+    hrrr_file, pers_file, lstm_file : str
+        Filenames within each `{base_path}/{division}/` for the HRRR,
+        persistence, and LSTM error CSVs respectively.
+    title : str
+        Plot title.
+    """
 
     def load_and_pivot(file):
         all_data = []

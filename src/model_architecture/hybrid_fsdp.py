@@ -1,24 +1,37 @@
+"""FSDP-aware variant of the Hybrid LSTM + ViT model.
+
+This is the FullyShardedDataParallel-friendly counterpart of
+`hybrid_vit_lstm.LSTM_Encoder_Decoder_with_ViT`.  The forward /
+training logic is the same; the differences live in `train_model`,
+`test_model`, and the loss / grad-scaler plumbing, which are wired
+up to work with sharded modules and rank-aware logging.
+
+Use this together with `hybrid_fsdp_training.py` (legacy reference
+file) or any equivalent distributed training driver.  For single-GPU
+training, prefer the simpler `hybrid_vit_lstm.LSTM_Encoder_Decoder_with_ViT`.
+"""
+
+import gc
+import os
 import sys
 
-sys.path.append(".")
-
 import torch
+import torch.distributed as dist
 import torch.nn as nn
 import torch.nn.functional as F
-import torch.distributed as dist
-import gc
+from torch.cuda.amp import GradScaler, autocast
 from torch.distributed.fsdp import (
     FullyShardedDataParallel as FSDP,
     FullStateDictConfig,
     ShardingStrategy,
     StateDictType,
 )
-from torch.distributed.fsdp.wrap import wrap
 from torch.distributed.fsdp.fully_sharded_data_parallel import MixedPrecision
 from torch.distributed.fsdp.sharded_grad_scaler import ShardedGradScaler
+from torch.distributed.fsdp.wrap import wrap
 from torch.nn.parallel import DistributedDataParallel as DDP
-import os
-from torch.cuda.amp import GradScaler, autocast
+
+sys.path.append(".")
 
 from model_architecture import encode_decode_lstm, hybrid_vit_encoder
 
@@ -26,6 +39,13 @@ torch.autograd.set_detect_anomaly(True)
 
 
 class LSTM_Encoder_Decoder_with_ViT(nn.Module):
+    """FSDP-aware Hybrid model.
+
+    Same constructor as `hybrid_vit_lstm.LSTM_Encoder_Decoder_with_ViT`.
+    The training methods accept sharded gradient scalers and only
+    print / save on rank 0.
+    """
+
     def __init__(
         self,
         num_sensors,
@@ -46,7 +66,7 @@ class LSTM_Encoder_Decoder_with_ViT(nn.Module):
         dropout,
         attention_dropout,
     ):
-        super(LSTM_Encoder_Decoder_with_ViT, self).__init__()
+        super().__init__()
         self.num_sensors = num_sensors
         self.hidden_units = hidden_units
         self.num_layers = num_layers

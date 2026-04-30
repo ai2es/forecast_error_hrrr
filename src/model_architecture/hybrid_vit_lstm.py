@@ -1,11 +1,26 @@
-import sys
+"""Hybrid LSTM + Vision-Transformer (ViT) seq2seq model.
 
-sys.path.append(".")
+The model fuses two complementary encoders:
+
+* `ShallowRegressionLSTM_encode` consumes the past + future
+  HRRR/NYSM feature window and returns a hidden state.
+* `VisionTransformer` consumes a stack of radiometer profiler images
+  for the same stations / timesteps and returns a per-(station, time)
+  embedding.
+
+The two embeddings are concatenated and decoded by
+`ShallowRegressionLSTM_decode` to produce one forecast-error value
+per future timestep.
+"""
+
+import gc
+import sys
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import gc
+
+sys.path.append(".")
 
 from model_architecture import encode_decode_lstm, hybrid_vit_encoder
 
@@ -13,6 +28,25 @@ torch.autograd.set_detect_anomaly(False)
 
 
 class LSTM_Encoder_Decoder_with_ViT(nn.Module):
+    """LSTM (time-series) + ViT (images) -> LSTM decoder.
+
+    All hyper-parameters are explicit constructor arguments to make
+    the model fully configurable from the training script
+    (`engine_hybrid_training.py`).
+
+    Parameters
+    ----------
+    num_sensors, hidden_units, num_layers, mlp_units, device, num_stations
+        Same meaning as `ShallowLSTM_seq2seq_multi_task`.
+    past_timesteps, future_timesteps : int
+        Number of past / future steps the ViT sees.  Together they
+        define the temporal axis of its position embeddings.
+    pos_embedding, time_embedding : tensor or callable
+        Spatial / temporal embeddings handed straight to the ViT.
+    vit_num_layers, num_heads, hidden_dim, mlp_dim, output_dim,
+    dropout, attention_dropout : ViT hyper-parameters.
+    """
+
     def __init__(
         self,
         num_sensors,
@@ -33,7 +67,7 @@ class LSTM_Encoder_Decoder_with_ViT(nn.Module):
         dropout,
         attention_dropout,
     ):
-        super(LSTM_Encoder_Decoder_with_ViT, self).__init__()
+        super().__init__()
         self.num_sensors = num_sensors
         self.hidden_units = hidden_units
         self.num_layers = num_layers
@@ -86,11 +120,14 @@ class LSTM_Encoder_Decoder_with_ViT(nn.Module):
             device=device,
         )
 
-        self.hidden_proj = nn.Linear(
-            2688, 1728
-        )  # Optional if dimensions need alignment
+        # Project the ViT output to the LSTM hidden width.  These
+        # constants assume the default hyper-parameter set used in
+        # `engine_hybrid_training.py` and may need to be re-derived
+        # from `vit_num_layers * hidden_dim` if you change them.
+        self.hidden_proj = nn.Linear(2688, 1728)
 
-        # MLP fusion layer to combine encoders directly
+        # Fuse the two encoder embeddings down to a single LSTM-shaped
+        # hidden state (concat -> Linear -> LeakyReLU -> Dropout).
         self.fusion_mlp = nn.Sequential(
             nn.Linear(hidden_units * 2, hidden_units),
             nn.LeakyReLU(),
@@ -108,6 +145,17 @@ class LSTM_Encoder_Decoder_with_ViT(nn.Module):
         dynamic_tf=True,
         decay_rate=0.02,
     ):
+        """One training epoch on `(X, P, y)` batches.
+
+        Parameters
+        ----------
+        data_loader : torch.utils.data.DataLoader
+            Yields `(X, P, y)` triples (use
+            `SequenceDatasetMultiTaskHybrid`).
+        loss_func, optimizer, epoch, training_prediction,
+        teacher_forcing_ratio, dynamic_tf, decay_rate :
+            See `ShallowLSTM_seq2seq_multi_task.train_model`.
+        """
         num_batches = len(data_loader)
         total_loss = 0
         self.train()
@@ -175,6 +223,7 @@ class LSTM_Encoder_Decoder_with_ViT(nn.Module):
         return avg_loss
 
     def test_model(self, data_loader, loss_function, epoch):
+        """Validation epoch on `(X, P, y)` batches under `torch.no_grad`."""
         num_batches = len(data_loader)
         total_loss = 0
         self.eval()
@@ -221,6 +270,12 @@ class LSTM_Encoder_Decoder_with_ViT(nn.Module):
         return avg_loss
 
     def predict(self, data_loader):
+        """Inference rollout on `(X, P, y, v)` batches.
+
+        Returns `(all_outputs, valid_times)` concatenated across the
+        loader.  Use `SequenceDatasetMultiTaskHybrid(...,
+        return_valid_times=True)` to produce 4-tuple batches.
+        """
         num_batches = len(data_loader)
         all_outputs = []
         all_valid_times = []

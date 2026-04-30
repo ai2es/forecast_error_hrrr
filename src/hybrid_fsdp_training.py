@@ -1,3 +1,26 @@
+"""Legacy multi-GPU (FSDP) training driver for the Hybrid model.
+
+NOTE FOR NEW READERS
+--------------------
+This file is kept as a historical reference for the FSDP /
+DistributedDataParallel training setup that produced earlier model
+checkpoints.  It depends on a handful of helper modules
+(`processing`, `data.create_data_for_lstm*`, `new_sequencer`,
+`profiler_inclusive_model`) that are NOT included in this repository,
+so it will not run as-is.
+
+For the supported single-process Hybrid training pipeline see
+`engine_hybrid_training.py`, which uses
+`model_architecture.hybrid_vit_lstm.LSTM_Encoder_Decoder_with_ViT`
+together with `prepare_hybrid_data` and the
+`SequenceDatasetMultiTaskHybrid` sequencer.
+
+The rest of this file documents the original FSDP loop (sharded
+encoder, ViT, decoder; mixed-precision; grad scaler; rank-0
+checkpointing) for anyone who wants to port it to a current
+distributed setup.
+"""
+
 import sys
 
 sys.path.append("..")
@@ -335,7 +358,7 @@ def save_model_weights(ml, rank, encoder_path, decoder_path, vit_path):
 
 
 def fsdp_main(rank, world_size, args):
-    print("Am I using GPUS ???", torch.cuda.is_available())
+    print("CUDA available?", torch.cuda.is_available())
     print("Number of gpus: ", torch.cuda.device_count())
 
     device = rank % torch.cuda.device_count()

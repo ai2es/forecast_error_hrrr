@@ -1,10 +1,19 @@
-import pandas as pd
-import numpy as np
-import os
+"""Per-climate-division MAE / MSE summarisers and plotters.
+
+This module provides helpers that walk a directory tree of inference
+output parquets (one subdirectory per station, files named with the
+forecast hour) and aggregate MAE / MSE per climate division.  The
+aggregated tables are written back to disk and can be plotted as bar
+charts.
+"""
+
 import glob
+import os
 import re
-import statistics as st
+
 import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
 from sklearn.metrics import mean_absolute_error, mean_squared_error
 
 
@@ -18,30 +27,28 @@ def compute_error_metrics_by_climate_division(
     prediction_col,
     model_name="HRRR",
 ):
-    """
-    Loop through climate divisions and stations to calculate MAE/MSE from parquet files.
+    """Aggregate MAE / MSE per climate division across all stations.
 
-    Parameters:
-    - nysm_csv_path: str, path to the NYSM metadata CSV (with `stid` and `climate_division_name`)
-    - base_dir: str, base directory containing station subfolders and parquet files
-    - metvar: str, meteorological variable name for file labeling
-    - output_root: str, where to save output parquet files per climate division
-    - model_name: str, model identifier in filenames
-    - filter_col: str, name of column to filter (e.g., "qc_flag"), or None
-    - target_col: str, column with ground truth values
-    - prediction_col: str, column with predicted values
-    """
-    """
-    Loop through climate divisions and stations to calculate MAE/MSE from parquet files.
-    
-    Parameters:
-    - nysm_csv_path: str, path to the NYSM metadata CSV (with `stid` and `climate_division_name`)
-    - base_dir: str, base directory containing station subfolders and parquet files
-    - metvar: str, meteorological variable name for file labeling
-    - output_root: str, where to save output parquet files per climate division
-    - filter_col: str, name of column to filter (e.g., "qc_flag"), or None
-    - target_col: str, column with ground truth values
-    - prediction_col: str, column with predicted values
+    Parameters
+    ----------
+    nysm_csv_path : str
+        Path to the NYSM metadata CSV (must contain ``stid`` and
+        ``climate_division_name`` columns).
+    base_dir : str
+        Root directory containing one subdirectory per station id,
+        each with per-(metvar, fh) parquet files.
+    metvar : str
+        Meteorological variable name used to filter filenames.
+    output_root : str
+        Where to write aggregated per-division parquet files.
+    filter_col : str or None
+        Column to drop NaNs from before computing metrics, or None.
+    target_col : str
+        Column holding the ground-truth value.
+    prediction_col : str
+        Column holding the model prediction.
+    model_name : str
+        Model identifier used in filenames (default "HRRR").
     """
     df = pd.read_csv(nysm_csv_path)
     clim_divs = df["climate_division_name"].unique()

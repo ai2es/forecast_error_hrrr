@@ -1,33 +1,41 @@
+"""Vision Transformer (ViT) encoder for the Hybrid model.
+
+Adapted from the reference torchvision ViT, with three small
+specialisations for the radiometer image stream:
+
+1. The patch embedding's `Conv2d` accepts a 4-channel input
+   (the four NYSM stations stacked along the channel axis) instead of
+   the usual 3 RGB channels.
+2. The position embedding is a learnable parameter sized to
+   `(stations + past_timesteps + future_timesteps + 1)` to encode the
+   four stations as separate "spatial" tokens plus the time axis.
+3. A simple `EncoderBlock`/`Encoder` stack is exposed through the
+   `VisionTransformer` class without the classifier head; the per-
+   station class-token output is what the Hybrid model fuses with the
+   LSTM hidden state.
+"""
+
+import math
 import sys
-
-sys.path.append(".")
-import pandas as pd
-import numpy as np
-import gc
-from datetime import datetime
-
-# pytorch
-import torch
-import torchvision
-import torch.nn as nn
-from torchvision.ops.misc import MLP, Conv2dNormActivation
-from torch.utils.data import Dataset
-from torch.utils.data import DataLoader
-from torch.nn.utils import clip_grad_norm_
-import torch.optim as optim
-import torch.nn.functional as F
-from torch.optim.lr_scheduler import ReduceLROnPlateau
-
-# ViT
 from collections import OrderedDict
 from functools import partial
 from typing import Any, Callable, Dict, List, NamedTuple, Optional
 
-import math
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from torchvision.ops.misc import MLP, Conv2dNormActivation
+
+sys.path.append(".")
 
 
 class MLPBlock(MLP):
-    """Transformer MLP block."""
+    """ViT transformer MLP block (`Linear -> GELU -> Linear`).
+
+    Subclasses `torchvision.ops.misc.MLP` with He-initialised weights
+    and a backwards-compatible `_load_from_state_dict` for older
+    checkpoints that used the pre-v2 key layout.
+    """
 
     _version = 2
 
@@ -82,7 +90,7 @@ class MLPBlock(MLP):
 
 
 class EncoderBlock(nn.Module):
-    """Transformer encoder block."""
+    """One transformer encoder layer (attention + MLP, residual)."""
 
     def __init__(
         self,
@@ -123,7 +131,8 @@ class EncoderBlock(nn.Module):
 
 
 class Encoder(nn.Module):
-    """Transformer Model Encoder for sequence to sequence translation."""
+    """Stack of `num_layers` `EncoderBlock`s with learned position +
+    time embeddings added to the input."""
 
     def __init__(
         self,
@@ -176,7 +185,20 @@ class Encoder(nn.Module):
 
 
 class VisionTransformer(nn.Module):
-    """Vision Transformer as per https://arxiv.org/abs/2010.11929."""
+    """Vision Transformer specialised for the radiometer image stream.
+
+    Reference: Dosovitskiy et al., 2020 (https://arxiv.org/abs/2010.11929).
+
+    Differences from the stock torchvision ViT:
+
+    * The patch embedding accepts a 4-channel input (one channel per
+      NYSM station in the local cluster).
+    * Position + time embeddings are sized for the
+      ``stations + past_timesteps + future_timesteps + 1`` (class
+      token) sequence used by the Hybrid model.
+    * The classifier head is omitted; the class-token embedding is
+      returned for downstream fusion with the LSTM hidden state.
+    """
 
     def __init__(
         self,

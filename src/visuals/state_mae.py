@@ -1,8 +1,22 @@
-import matplotlib.pyplot as plt
-import matplotlib.patches as mpatches
-import geopandas as gpd
+"""Per-station MAE choropleth for the OKSM mesonet.
+
+Renders a Cartopy / Lambert-Conformal map with each station drawn as
+a scatter point sized and coloured by its mean-absolute-error value
+(`grouped_df['mae']`).  Climate divisions are shaded behind the
+points.
+
+This script expects a pre-computed `grouped` Series (station_id ->
+MAE) to exist in the importing namespace; it is intended to be
+dropped into a notebook or REPL after such a Series has been built
+from the inference-vs-truth comparison parquets produced by
+`eval_model_metrics.py`.
+"""
+
 import cartopy.crs as crs
 import cartopy.feature as cfeature
+import geopandas as gpd
+import matplotlib.patches as mpatches
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
@@ -24,7 +38,19 @@ clim_div = [
 
 
 def create_xCITE_gif(grouped_df, clim_div=clim_div, logo=None):
-    # Uniform font size
+    """Render the per-station MAE map.
+
+    Parameters
+    ----------
+    grouped_df : pandas.DataFrame
+        One row per station with columns `station`, `lat`, `lon`,
+        `mae`.
+    clim_div : list[str]
+        Climate-division labels used in the legend.  Defaults to the
+        OKSM (Oklahoma) divisions defined at module top.
+    logo : optional
+        Reserved for future use (currently unused).
+    """
     font_size = 22
 
     # Create plot

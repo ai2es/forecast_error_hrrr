@@ -1,18 +1,38 @@
+"""Bulk error reduction across all stations and forecast hours.
+
+Iterates the linear-calibration parquets under `lookup_path` for every
+station / forecast-hour combination, joins them against the resampled
+NYSM observations, and writes a single per-(metvar, station) summary
+parquet that the downstream `error_output_bulk_funcs.*` plotting
+helpers consume.
+
+NOTE FOR NEW READERS
+--------------------
+This script imports `data.nysm_data`, `data.oksm_data`, and
+`evaluate.un_normalize_out`, which are part of the original sibling
+`nwp_bias` repository and are NOT included here.  It is preserved for
+reference; finishing the port to this repo means swapping these for
+the equivalents in `model_data` (NYSM) and a per-window normalization
+strategy now that the LSTM produces output in raw error units.
+"""
+
+import multiprocessing as mp
+import os
 import sys
+from datetime import datetime
+
+import numpy as np
+import pandas as pd
 
 sys.path.append("..")
-import pandas as pd
-import numpy as np
+
+from data import nysm_data, oksm_data  # noqa: F401  (legacy import)
+from evaluate import un_normalize_out  # noqa: F401  (legacy import)
 from visuals import error_output_bulk_funcs
-from data import nysm_data, oksm_data
-from datetime import datetime
-import statistics as st
-from evaluate import un_normalize_out
-import os
-import multiprocessing as mp
 
 
 def get_errors(lookup_path, stations, metvar):
+    """Build a single error-difference DataFrame across stations / fh."""
     master_df = pd.DataFrame()
     # no_ls = ['SEMI', 'YUKO', "WEB3", "FAIR"]
     no_ls = []

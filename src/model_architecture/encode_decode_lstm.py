@@ -1,15 +1,49 @@
+"""Encoder-decoder LSTM building blocks.
+
+This module defines the three classes used by both the LSTM-only and
+the BNN training / inference pipelines:
+
+* `ShallowRegressionLSTM_encode`
+    Stacked LSTM that consumes the past + future feature window and
+    returns the final `(hidden, cell)` tuple to be handed to the
+    decoder.
+
+* `ShallowRegressionLSTM_decode`
+    Stacked LSTM + 2-layer MLP head that autoregressively rolls out
+    `forecast_steps` predictions from the encoder hidden state.
+
+* `ShallowLSTM_seq2seq_multi_task`
+    Composite seq2seq module that owns one encoder and one decoder
+    and exposes `train_model`, `test_model`, and `predict` so the
+    outer training loops stay short.
+
+The encoder is fed an `x` tensor of shape
+``(batch, sequence_length + forecast_steps, num_features)``.  In the
+sequencer the future portion contains real future HRRR forecasts with
+the trailing-64 NYSM columns persisted from the last past row; see
+`model_architecture/sequencer.py` for the leak-prevention rationale.
+"""
+
+import gc
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import gc
+
 
 torch.autograd.set_detect_anomaly(True)
 
 
 class ShallowRegressionLSTM_encode(nn.Module):
+    """Stacked-LSTM encoder.
+
+    Returns the final `(h, c)` hidden state of a `num_layers`-deep LSTM
+    after consuming the entire input window.
+    """
+
     def __init__(self, num_sensors, hidden_units, num_layers, mlp_units, device):
         super().__init__()
-        self.num_sensors = num_sensors  # this is the number of features
+        self.num_sensors = num_sensors  # number of input features
         self.hidden_units = hidden_units
         self.num_layers = num_layers
         self.device = device
@@ -32,9 +66,17 @@ class ShallowRegressionLSTM_encode(nn.Module):
 
 
 class ShallowRegressionLSTM_decode(nn.Module):
+    """Stacked-LSTM decoder with a 2-layer MLP head.
+
+    Per call: takes a single timestep's input + a hidden state, runs
+    one LSTM step, and projects the output through a `LeakyReLU` MLP
+    back to `num_sensors` features.  The outer module (`train_model`,
+    `predict`) calls this `forecast_steps` times in a recursive loop.
+    """
+
     def __init__(self, num_sensors, hidden_units, num_layers, mlp_units, device):
         super().__init__()
-        self.num_sensors = num_sensors  # this is the number of features
+        self.num_sensors = num_sensors  # number of input/output features
         self.hidden_units = hidden_units
         self.num_layers = num_layers
         self.device = device
@@ -69,10 +111,37 @@ class ShallowRegressionLSTM_decode(nn.Module):
 
 
 class ShallowLSTM_seq2seq_multi_task(nn.Module):
+    """LSTM encoder-decoder seq2seq model.
+
+    Parameters
+    ----------
+    num_sensors : int
+        Number of input/output features per timestep.
+    hidden_units : int
+        Width of the LSTM hidden state in both encoder and decoder.
+    num_layers : int
+        Stack depth shared by encoder and decoder.
+    mlp_units : int
+        Width of the decoder's hidden MLP layer.
+    device : torch.device
+        Compute device.
+    num_stations : int
+        Currently unused; reserved for a multi-head per-station decoder
+        variant that may be re-enabled in future versions.
+
+    The class also exposes three loop helpers:
+
+    * `train_model(...)`   - one training epoch (recursive or
+                             teacher-forced rollout)
+    * `test_model(...)`    - one validation epoch
+    * `predict(...)`       - inference rollout, returning concatenated
+                             outputs across all batches
+    """
+
     def __init__(
         self, num_sensors, hidden_units, num_layers, mlp_units, device, num_stations
     ):
-        super(ShallowLSTM_seq2seq_multi_task, self).__init__()
+        super().__init__()
         self.num_sensors = num_sensors
         self.hidden_units = hidden_units
         self.num_layers = num_layers
@@ -107,6 +176,28 @@ class ShallowLSTM_seq2seq_multi_task(nn.Module):
         dynamic_tf=True,
         decay_rate=0.02,
     ):
+        """Run one training epoch.
+
+        Parameters
+        ----------
+        data_loader : torch.utils.data.DataLoader
+            Yields `(X, y)` per batch where
+            ``X.shape == (B, sequence_length + forecast_steps, F)`` and
+            ``y.shape == (B, forecast_steps, 1)``.
+        loss_func : Callable[[Tensor, Tensor], Tensor]
+        optimizer : torch.optim.Optimizer
+        epoch : int
+            Used only for the printed log line.
+        training_prediction : {"recursive", "teacher_forcing"}
+            "recursive" feeds the previous decoder output back in;
+            "teacher_forcing" mixes ground-truth `y` with the decoder
+            output at probability `teacher_forcing_ratio`.
+        teacher_forcing_ratio : float
+        dynamic_tf : bool
+            If True, decay `teacher_forcing_ratio` after every batch.
+        decay_rate : float
+            Per-batch decrement applied to `teacher_forcing_ratio`.
+        """
         num_batches = len(data_loader)
         total_loss = 0
         self.train()
@@ -166,6 +257,7 @@ class ShallowLSTM_seq2seq_multi_task(nn.Module):
         return avg_loss
 
     def test_model(self, data_loader, loss_function, epoch):
+        """Run one validation / test epoch under `torch.no_grad`."""
         num_batches = len(data_loader)
         total_loss = 0
         self.eval()
@@ -197,6 +289,11 @@ class ShallowLSTM_seq2seq_multi_task(nn.Module):
         return avg_loss
 
     def predict(self, data_loader):
+        """Run inference and return all per-batch outputs concatenated.
+
+        Returns a tensor of shape
+        ``(N_total_items, forecast_steps, num_sensors)``.
+        """
         num_batches = len(data_loader)
         all_outputs = []
         self.eval()

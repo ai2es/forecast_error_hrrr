@@ -1,21 +1,46 @@
+"""Density scatter plot of model output vs realised target error.
+
+For every station-directory under `master_dir`, reads the linear-
+calibration parquets for the requested `metvar`, accumulates
+`(Model forecast, target_error)` pairs over the calendar year 2024,
+fits a 1-NN density estimate via `cuml.NearestNeighbors`, and renders
+a hex-binned scatter plot on a log-norm colour scale.
+"""
+
+import os
+from datetime import datetime
+
 import cudf
 import cupy as cp
 import matplotlib.pyplot as plt
-import os
-from cuml.neighbors import NearestNeighbors
-from datetime import datetime
-from matplotlib.colors import LogNorm
 import numpy as np
+from cuml.neighbors import NearestNeighbors
+from matplotlib.colors import LogNorm
 
 
 def date_filter(ldf, time1, time2):
+    """Strict date-window filter (`time1 < valid_time < time2`)."""
     ldf = ldf[ldf["valid_time"] > time1]
     ldf = ldf[ldf["valid_time"] < time2]
-
     return ldf
 
 
 def main(stations, master_dir, metvar, clim_div):
+    """Render the bulk scatter for all stations in `stations`.
+
+    Parameters
+    ----------
+    stations : iterable[str]
+        Station ids to include (filtered against directory names under
+        `master_dir`).
+    master_dir : str
+        Root directory, with one subdirectory per station id holding
+        per-(metvar, fh) calibration parquets.
+    metvar : str
+        The variable to plot ('t2m', 'u_total', or 'tp').
+    clim_div : str
+        Climate-division label used in the plot title only.
+    """
     x_column = []
     y_column = []
     # no_ls = ['SEMI', 'YUKO', "WEB3", "FAIR"]
