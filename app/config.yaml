@@ -1,0 +1,101 @@
+# =============================================================================
+# Forecast Error App — User Configuration
+# =============================================================================
+# Edit this file to describe your area of interest, data sources, training
+# settings, and output locations.  All other files (notebooks, helpers) read
+# this as their single source of truth via app/utils/config_loader.py.
+# =============================================================================
+
+# ---------------------------------------------------------------------------
+# Bounding box — the spatial extent of the analysis.
+# All stations (ASOS or local mesonet) and HRRR grid points outside this box
+# are discarded during data setup.
+# Units: decimal degrees (negative = West / South)
+# ---------------------------------------------------------------------------
+bbox:
+  lat_min: 40.0
+  lat_max: 43.5
+  lon_min: -80.0
+  lon_max: -71.5
+
+# ---------------------------------------------------------------------------
+# Data sources
+# ---------------------------------------------------------------------------
+data:
+  # Directory where raw HRRR grib2 files will be downloaded (or already live).
+  hrrr_raw_dir: ./output/hrrr_raw
+
+  # Root directory for all cleaned parquet files produced during setup.
+  parquets_dir: ./output/parquets
+
+  # Observation network to use.
+  #   "asos"  — download ASOS hourly obs from the IEM REST API
+  #   "local" — read pre-existing parquets from `mesonet_local_dir`
+  mesonet_source: asos
+
+  # Path to a directory containing pre-cleaned 1H mesonet parquets.
+  # Only required when mesonet_source == "local".
+  # Expected filename pattern: mesonet_1H_obs_{YYYY}.parquet
+  # Required columns: station, valid_time, tair, wspd_sonic_mean,
+  #                   precip_total, lat, lon, elev
+  mesonet_local_dir: null
+
+  # Path to a CSV with station metadata.
+  # Required columns: station, lat, lon
+  # When mesonet_source == "asos" this is generated automatically during
+  # data setup and this field can be left as null.
+  station_meta_csv: null
+
+  # HRRR forecast hours to download and model.  1–18 are supported.
+  forecast_hours: [1, 3, 6, 12, 18]
+
+  # Target meteorological variables.
+  # Supported: t2m (2 m temperature), u_total (wind speed), tp (precipitation)
+  metvars: [t2m, u_total, tp]
+
+# ---------------------------------------------------------------------------
+# Model family
+# ---------------------------------------------------------------------------
+# Choose one of: lstm | bnn | hybrid
+#   lstm   — encoder-decoder LSTM, point forecast
+#   bnn    — LSTM + Bayesian MLP head; outputs mu, epistemic_var, aleatoric_var
+#   hybrid — LSTM + Vision Transformer; requires radiometer images (see README)
+model: lstm
+
+# ---------------------------------------------------------------------------
+# Training
+# ---------------------------------------------------------------------------
+training:
+  # Date range covering ALL available data (train + val + test together).
+  start_date: "2023-01-01"
+  end_date:   "2024-12-31"
+
+  # Chronological split fractions — must sum to 1.0.
+  # The date range is divided in order: train → val → test.
+  train_frac: 0.70
+  val_frac:   0.15
+  test_frac:  0.15
+
+  # Standard hyper-parameters.
+  epochs:        50
+  batch_size:    1000
+  num_layers:    3
+  learning_rate: 5.0e-5
+  weight_decay:  0.0
+  sequence_length: 30  # hours of past data fed to the encoder
+
+  # GPU device index (0 = first GPU).
+  device_id: 0
+
+  # BNN-specific: Monte-Carlo samples for epistemic uncertainty (default 30).
+  mc_samples: 30
+
+# ---------------------------------------------------------------------------
+# Output locations
+# ---------------------------------------------------------------------------
+output:
+  # Where trained model weights (.pth files) are saved.
+  models_dir: ./output/models
+
+  # Where inference predictions and error metrics parquets are written.
+  results_dir: ./output/results
