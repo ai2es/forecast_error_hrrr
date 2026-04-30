@@ -31,82 +31,6 @@ class ShallowRegressionLSTM_encode(nn.Module):
         return hn, cn
 
 
-class Attention(nn.Module):
-    def __init__(self, hidden_dim, input_dim):
-        super(Attention, self).__init__()
-        self.hidden_dim = hidden_dim
-        self.input_dim = input_dim
-        self.attn = nn.Linear(self.hidden_dim + self.input_dim, hidden_dim)
-        self.v = nn.Parameter(torch.rand(hidden_dim))
-
-    def forward(self, hidden, encoder_outputs):
-        # hidden: (num_layers, batch_size, hidden_dim)
-        # encoder_outputs: (batch_size, seq_len, hidden_dim)
-
-        # Use the last layer of the hidden state for attention
-        hidden = hidden[-1]  # (batch_size, hidden_dim)
-
-        # Repeat hidden state (decoder hidden state) for each time step
-        hidden = hidden.unsqueeze(1).repeat(
-            1, encoder_outputs.size(1), 1
-        )  # (batch_size, seq_len, hidden_dim)
-
-        # Concatenate hidden state with encoder outputs
-        combined = torch.cat(
-            (hidden, encoder_outputs), dim=2
-        )  # (batch_size, seq_len, hidden_dim + input_dim)
-
-        # Compute energy
-        energy = torch.tanh(self.attn(combined))  # (batch_size, seq_len, hidden_dim)
-
-        # Compute attention weights
-        energy = energy.transpose(1, 2)  # (batch_size, hidden_dim, seq_len)
-        v = self.v.repeat(encoder_outputs.size(0), 1).unsqueeze(
-            1
-        )  # (batch_size, 1, hidden_dim)
-        attn_weights = torch.bmm(v, energy).squeeze(1)  # (batch_size, seq_len)
-
-        return F.softmax(attn_weights, dim=1)  # (batch_size, seq_len)
-
-
-class LSTM_Attention(nn.Module):
-    def __init__(self, hidden_dim, input_dim):
-        super(LSTM_Attention, self).__init__()
-        self.hidden_dim = hidden_dim
-        self.input_dim = input_dim
-        self.attn = nn.Linear(self.hidden_dim + self.input_dim, self.hidden_dim)
-        self.v = nn.Parameter(torch.rand(hidden_dim))
-
-    def forward(self, hidden, encoder_outputs):
-        # hidden: (num_layers, batch_size, hidden_dim)
-        # encoder_outputs: (batch_size, seq_len, hidden_dim)
-
-        # Use the last layer of the hidden state for attention
-        hidden = hidden[-1]  # (batch_size, hidden_dim)
-
-        # Repeat hidden state (decoder hidden state) for each time step
-        hidden = hidden.unsqueeze(1).repeat(
-            1, encoder_outputs.size(1), 1
-        )  # (batch_size, seq_len, hidden_dim)
-
-        # Concatenate hidden state with encoder outputs
-        combined = torch.cat(
-            (hidden, encoder_outputs), dim=2
-        )  # (batch_size, seq_len, hidden_dim + input_dim)
-
-        # Compute energy
-        energy = torch.tanh(self.attn(combined))  # (batch_size, seq_len, hidden_dim)
-
-        # Compute attention weights
-        energy = energy.transpose(1, 2)  # (batch_size, hidden_dim, seq_len)
-        v = self.v.repeat(encoder_outputs.size(0), 1).unsqueeze(
-            1
-        )  # (batch_size, 1, hidden_dim)
-        attn_weights = torch.bmm(v, energy).squeeze(1)  # (batch_size, seq_len)
-
-        return F.softmax(attn_weights, dim=1)  # (batch_size, seq_len)
-
-
 class ShallowRegressionLSTM_decode(nn.Module):
     def __init__(self, num_sensors, hidden_units, num_layers, mlp_units, device):
         super().__init__()
@@ -135,16 +59,9 @@ class ShallowRegressionLSTM_decode(nn.Module):
             nn.Linear(self.mlp_units, self.num_sensors),
         )
 
-        # self.attention = Attention(hidden_units, num_sensors)  # Add Attention mechanism
-
     def forward(self, x, hidden):
         x = x.to(self.device)
         out, hidden = self.lstm(x, hidden)
-
-        # # Apply attention
-        # attn_weights = self.attention(hidden[0], x)
-        # context = attn_weights.unsqueeze(1).bmm(x)
-        # out_ = torch.cat((out, context), dim=2)
 
         # pass through mlp
         outn = self.mlp(out)
