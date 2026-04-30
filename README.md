@@ -423,10 +423,13 @@ it returns the predictive mean alongside both components separately.
 ## Citation
 
 If this code, or models trained from it, contribute to your research,
-please cite the project. \\ Please cite this paper: Evans, D. A., Sulia, K. J., Bassill, N. P., Thorncroft, C. D., Rothenberger, J. C., & Gaudet, L. C. (2025). Predicting Forecast Error for the HRRR Using LSTM Neural Networks: A Comparative Study Using New York and Oklahoma State Mesonets. ArXiv. https://arxiv.org/abs/2512.14898 \\
+please cite the project.
+
+Please cite this paper: Evans, D. A., Sulia, K. J., Bassill, N. P., Thorncroft, C. D., Rothenberger, J. C., & Gaudet, L. C. (2025). Predicting Forecast Error for the HRRR Using LSTM Neural Networks: A Comparative Study Using New York and Oklahoma State Mesonets. ArXiv. https://arxiv.org/abs/2512.14898
+
 reference this GitHub
 repository and the
-[NSF AI2ES institute](https://www.ai2es.org/).)
+[NSF AI2ES institute](https://www.ai2es.org/).
 
 This work was supported by AI2ES — the NSF AI Institute for
 Research on Trustworthy AI in Weather, Climate, and Coastal
